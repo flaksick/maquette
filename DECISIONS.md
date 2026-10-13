@@ -3,18 +3,26 @@
 Dated records. Each cites the measured number that drove it (`N @ source`). When a later
 measurement disagrees, a new record supersedes the old one; old records are never edited.
 
-## Pending: decided by the device run (P0 probe on the iPad Air 4)
+## 2026-10-13 · P0 device run: decisions
+Source for every number below: `reports/2026-10-13-air4-safari26.6.json` (iPad Air 4, 820×1180 @2x,
+Safari 26.6, `hardwareConcurrency` 4). All tests ran in a Safari tab (every launch has
+`standalone: false`), not the installed Home Screen app.
 
-| Spike | Question | Decided by |
+| Spike | Measured | Decision |
 |---|---|---|
-| S1 | Memory budget for the 4 GB class; restart-in-session vs "swipe-close and reopen" (PLT-7) | `s1.summary` + re-instantiation in the device report |
-| S2 | One persist worker or two | `s2.latencySingleWorker` vs `s2.latencyTwoWorkers` p99 |
-| S3 | Rust confirmed (composite score ≥ 1.0)? Ship the scalar build? | `s3.compositeScore`, `s3.selftest` |
-| S4 | Threads on or off | `s4.bestSpeedup` ≥ 1.5 and `s4ReloadLoop` stable 20/20 |
-| S5 | GPU page size; comfortable polycount; WebGPU no/yes | `s5.tris*.perPage.fps`, `s5.upload` |
-| S6 | Input layer; is three-finger redo usable? | `s6.threeFingerRedoUsable`, `s6.gestureLeaks` |
-| S7 | Export path (share vs download) and picker `accept` | `s7.exports`, `s7.imports` |
-| S8 | Offline cold launch works; Home Screen/Safari isolation; icon-delete wording | `s8.launches`, `s8.*SeesOtherContext`, `s8.dummyMarkerSurvivedIconDelete` |
+| S1 memory | Killed at 2,496 (wasm-grow), 2,496 (typed arrays), 2,560 MB (reserve); last OK 2,432 / 2,432 / 2,496 MB; idle; 3 of 8 planned runs | **4 GB-class budget prior = 0.6 × 2,432 = 1,459 MB** for the whole app (WASM + tracked buffers). GPU and "loaded" runs not measured: the prior's 0.4 margin plus PLT-8 learning cover them |
+| S2 saves | 3/3 balloon-kill runs pass: acked 200 → 201 intact, 240 → 240, 240 → 240; `persist()` false in a tab; quota 34.8 GB | Journal design (flush, then ack; CRC-checked records) confirmed on device. One persist worker to start (Mac p99 8.4 vs 6.9 ms for two); device latency measured by PRJ-3's own trace in P1a |
+| S3 engine | Kernel TS/Rust 0.93, rebuild 1.61, composite **1.22**; Rust kernel 1.01 ms/step at 2M tris; setup 437 ms; SIMD self-test 1/1; SIMD = scalar bit-identical | **Rust confirmed. Ship the SIMD build only**; keep the self-test as a boot check |
+| S4 threads | `crossOriginIsolated` via our service worker; shared memory up to 65,536 pages OK 20/20 reloads; speedup 1.61 / 2.24 / 2.88 / 2.62× at 2 / 4 / 6 / 8 workers; ping 6 µs | Threads are viable (≥ 1.5×, stable). **Adoption deferred** until a feature needs them (dyntopo/remesh, P2–P3) and they're confirmed in the Home Screen app. Pool size comes from the measured curve (6), never `hardwareConcurrency` (reports 4) |
+| S5 GPU | Paged multi-draw at 57.5 / 58.3 / 58.4 / 57.5 fps for 1 / 2 / 4 / 8M tris (5 pages, 168 MB at 8M); multi-draw ≈ per-page draw; worker rAF and OffscreenCanvas WebGL2 present | **GPU is not the limit on the Air 4** (60 fps cap). 16 MB pages kept. WebGL2 stays; WebGPU not needed. Comfortable polycount is set by memory and engine time |
+| S7 files | Share-sheet export of an OBJ worked; re-import through a picker with **no `accept` filter** was byte-identical | Import uses no `accept` filter (plan). 200 MB export moves to EXP-7's P1a gate |
+| S8 install | Dummy app: marker did **not** survive deleting the Home Screen icon | Deleting the icon deletes the app's data: PRJ-6 says so in plain words. Offline cold launch and Home Screen isolation move to P1a's exit gate (they need the installed app) |
+
+Not measured on device, now part of P1a's gates instead: S2 save latency (PRJ-3 device trace),
+S5 uploads and resume-after-background (PLT-5), S6 Pencil and gestures (NAV-2/NAV-3: redo stays a
+button until the system three-finger bar is checked), S8 standalone/offline (PLT-1/PLT-2).
+Probe bug noted: the wasm-reserve marker lost `reservedMB` once growth began (it didn't affect the
+kill point).
 
 ## 2026-10-13 · Raw C ABI instead of wasm-bindgen
 The engine boundary is pointers into linear memory plus counts (mesh arrays are read in place

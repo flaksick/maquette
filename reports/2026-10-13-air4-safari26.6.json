@@ -1,0 +1,890 @@
+{
+ "probeBuild": "2026-10-13 15:52",
+ "generatedAt": "2026-10-13T17:35:19.678Z",
+ "device": {
+  "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Safari/605.1.15",
+  "platform": "MacIntel",
+  "maxTouchPoints": 5,
+  "screen": {
+   "width": 820,
+   "height": 1180,
+   "dpr": 2
+  },
+  "viewport": {
+   "width": 1180,
+   "height": 663
+  },
+  "hardwareConcurrency": 4,
+  "deviceMemory": null,
+  "displayModeStandalone": false,
+  "navigatorStandalone": false,
+  "crossOriginIsolated": true,
+  "webgpu": {
+   "info": {},
+   "maxBufferSize": 715827880,
+   "maxStorageBufferBindingSize": 715827880,
+   "features": [
+    "depth-clip-control",
+    "depth32float-stencil8",
+    "timestamp-query",
+    "texture-compression-etc2",
+    "texture-compression-astc",
+    "texture-compression-astc-sliced-3d",
+    "indirect-first-instance",
+    "shader-f16",
+    "rg11b10ufloat-renderable",
+    "bgra8unorm-storage",
+    "float32-blendable",
+    "float16-renderable",
+    "float32-renderable",
+    "core-features-and-limits",
+    "texture-formats-tier1"
+   ]
+  },
+  "storageEstimate": {
+   "quota": 34789235098,
+   "usage": 145790811
+  },
+  "storagePersisted": false,
+  "serviceWorkerControlled": true
+ },
+ "s1": {
+  "runs": [
+   {
+    "mode": "wasm-grow",
+    "run": 1,
+    "condition": "idle",
+    "outcome": "killed",
+    "killedAtMB": 2496,
+    "lastOkMB": 2432,
+    "reservedMB": null,
+    "error": null,
+    "t": "2026-10-13T17:33:47.792Z"
+   },
+   {
+    "mode": "typed",
+    "run": 1,
+    "condition": "idle",
+    "outcome": "killed",
+    "killedAtMB": 2496,
+    "lastOkMB": 2432,
+    "reservedMB": null,
+    "error": null,
+    "t": "2026-10-13T17:34:05.620Z"
+   },
+   {
+    "mode": "wasm-reserve",
+    "run": 1,
+    "condition": "idle",
+    "outcome": "killed",
+    "killedAtMB": 2560,
+    "lastOkMB": 2496,
+    "reservedMB": null,
+    "error": null,
+    "t": "2026-10-13T17:34:21.673Z"
+   }
+  ]
+ },
+ "s2": {
+  "persistGranted": false,
+  "estimate": {
+   "quota": 34789235098,
+   "usage": 177494043
+  },
+  "updatedAt": "2026-10-13T17:28:06.150Z",
+  "killRuns": [
+   {
+    "t": "2026-10-13T17:28:19.771Z",
+    "ackedSeq": 200,
+    "scan": {
+     "validRecords": 201,
+     "lastValidSeq": 201,
+     "stopReason": "end",
+     "bytes": 52694160
+    },
+    "pass": true
+   },
+   {
+    "t": "2026-10-13T17:28:38.538Z",
+    "ackedSeq": 240,
+    "scan": {
+     "validRecords": 240,
+     "lastValidSeq": 240,
+     "stopReason": "end",
+     "bytes": 62918400
+    },
+    "pass": true
+   },
+   {
+    "t": "2026-10-13T17:28:51.970Z",
+    "ackedSeq": 240,
+    "scan": {
+     "validRecords": 240,
+     "lastValidSeq": 240,
+     "stopReason": "end",
+     "bytes": 62918400
+    },
+    "pass": true
+   }
+  ]
+ },
+ "s3": {
+  "selftest": {
+   "compiled": 1,
+   "small": 1,
+   "large": 1
+  },
+  "simd": {
+   "variant": "simd",
+   "setupMs": 437.2,
+   "totalMs": 192.1,
+   "msPerStep": 0.961,
+   "steady": {
+    "n": 180,
+    "mean": 1.011,
+    "p50": 1.5,
+    "p95": 1.66,
+    "p99": 1.7,
+    "max": 1.76
+   },
+   "checksum": -1067.8115111484658,
+   "rebuildMs": {
+    "n": 3,
+    "mean": 330.433,
+    "p50": 331.48,
+    "p95": 334,
+    "p99": 334,
+    "max": 334
+   },
+   "wasmMemoryMB": 212.7
+  },
+  "scalar": {
+   "variant": "scalar",
+   "setupMs": 433.1,
+   "totalMs": 191.1,
+   "msPerStep": 0.956,
+   "steady": {
+    "n": 180,
+    "mean": 1.006,
+    "p50": 1.5,
+    "p95": 1.66,
+    "p99": 1.7,
+    "max": 1.72
+   },
+   "checksum": -1067.8115111484658,
+   "rebuildMs": {
+    "n": 3,
+    "mean": 328.12,
+    "p50": 327.68,
+    "p95": 332.76,
+    "p99": 332.76,
+    "max": 332.76
+   },
+   "wasmMemoryMB": 212.7
+  },
+  "ts": {
+   "variant": "ts",
+   "rebuildMs": {
+    "n": 3,
+    "mean": 532.073,
+    "p50": 517.92,
+    "p95": 580.04,
+    "p99": 580.04,
+    "max": 580.04
+   },
+   "totalMs": 192.7,
+   "msPerStep": 0.964,
+   "steady": {
+    "n": 180,
+    "mean": 0.944,
+    "p50": 1.38,
+    "p95": 1.52,
+    "p99": 1.56,
+    "max": 2.12
+   },
+   "checksum": -1067.8095194578054,
+   "verts": 998786,
+   "tris": 1997568,
+   "leaves": 2048
+  },
+  "tsOverRust": 0.93,
+  "tsOverRustRebuild": 1.61,
+  "compositeScore": 1.22,
+  "simdBitIdenticalToScalar": true,
+  "tsChecksumRelDiff": 1.865208081732583e-06,
+  "decision": "rust-confirmed",
+  "updatedAt": "2026-10-13T17:27:20.453Z"
+ },
+ "s4": {
+  "crossOriginIsolated": true,
+  "sharedArrayBuffer": true,
+  "hardwareConcurrency": 4,
+  "sharedMemory": {
+   "max16384": "ok",
+   "max32768": "ok",
+   "max65536": "ok"
+  },
+  "curve": {
+   "w1_ms": 111.6,
+   "w1_speedup": 1,
+   "w2_ms": 69.3,
+   "w2_speedup": 1.61,
+   "w4_ms": 49.9,
+   "w4_speedup": 2.24,
+   "w6_ms": 38.8,
+   "w6_speedup": 2.88,
+   "w8_ms": 42.6,
+   "w8_speedup": 2.62
+  },
+  "bestSpeedup": 2.88,
+  "pingRoundTripUs": 6,
+  "decision": "threads-faster (still needs reload stability)",
+  "updatedAt": "2026-10-13T17:29:13.040Z",
+  "reloadLoop": {
+   "reloads": 20,
+   "max16384_ok": 20,
+   "max32768_ok": 20,
+   "max65536_ok": 20,
+   "coiTrue": 20
+  }
+ },
+ "s5": {
+  "caps": {
+   "renderer": "Apple GPU",
+   "vendor": "Apple Inc.",
+   "maxTextureSize": 16384,
+   "multiDraw": true,
+   "extensions": [
+    "EXT_clip_control",
+    "EXT_color_buffer_float",
+    "EXT_color_buffer_half_float",
+    "EXT_conservative_depth",
+    "EXT_depth_clamp",
+    "EXT_polygon_offset_clamp",
+    "EXT_render_snorm",
+    "EXT_texture_filter_anisotropic",
+    "EXT_texture_mirror_clamp_to_edge",
+    "EXT_texture_norm16",
+    "KHR_parallel_shader_compile",
+    "NV_shader_noperspective_interpolation",
+    "OES_draw_buffers_indexed",
+    "OES_sample_variables",
+    "OES_shader_multisample_interpolation",
+    "WEBGL_blend_func_extended",
+    "WEBGL_clip_cull_distance",
+    "WEBGL_compressed_texture_astc",
+    "WEBGL_compressed_texture_etc",
+    "WEBGL_compressed_texture_etc1",
+    "WEBGL_compressed_texture_pvrtc",
+    "WEBKIT_WEBGL_compressed_texture_pvrtc",
+    "WEBGL_debug_renderer_info",
+    "WEBGL_debug_shaders",
+    "WEBGL_lose_context",
+    "WEBGL_multi_draw",
+    "WEBGL_polygon_mode",
+    "WEBGL_provoking_vertex",
+    "WEBGL_render_shared_exponent",
+    "WEBGL_stencil_texturing"
+   ],
+   "workerRaf": true
+  },
+  "updatedAt": "2026-10-13T17:29:54.449Z",
+  "tris1002252": {
+   "pages": 1,
+   "gpuMB": 21,
+   "buildMs": 259.2,
+   "verts": 501128,
+   "tris": 1002252,
+   "leaves": 1024,
+   "perPage": {
+    "fps": 57.5,
+    "frameMs": {
+     "n": 173,
+     "mean": 17.395,
+     "p50": 17.28,
+     "p95": 17.98,
+     "p99": 18.4,
+     "max": 77.04
+    }
+   },
+   "multiDraw": {
+    "fps": 58.4,
+    "frameMs": {
+     "n": 176,
+     "mean": 17.035,
+     "p50": 17.42,
+     "p95": 18,
+     "p99": 18.1,
+     "max": 18.34
+    }
+   }
+  },
+  "tris1997568": {
+   "pages": 2,
+   "gpuMB": 41.9,
+   "buildMs": 588.5,
+   "verts": 998786,
+   "tris": 1997568,
+   "leaves": 2048,
+   "perPage": {
+    "fps": 58.3,
+    "frameMs": {
+     "n": 176,
+     "mean": 17.116,
+     "p50": 17.48,
+     "p95": 18.14,
+     "p99": 18.34,
+     "max": 18.4
+    }
+   },
+   "multiDraw": {
+    "fps": 57.7,
+    "frameMs": {
+     "n": 173,
+     "mean": 17.257,
+     "p50": 17.54,
+     "p95": 18.08,
+     "p99": 18.18,
+     "max": 24.34
+    }
+   }
+  },
+  "tris3995148": {
+   "pages": 3,
+   "gpuMB": 84,
+   "buildMs": 915.4,
+   "verts": 1997576,
+   "tris": 3995148,
+   "leaves": 4096,
+   "perPage": {
+    "fps": 58.4,
+    "frameMs": {
+     "n": 176,
+     "mean": 17.102,
+     "p50": 17.46,
+     "p95": 18.18,
+     "p99": 18.38,
+     "max": 24.4
+    }
+   },
+   "multiDraw": {
+    "fps": 57.8,
+    "frameMs": {
+     "n": 174,
+     "mean": 17.185,
+     "p50": 17.36,
+     "p95": 17.64,
+     "p99": 17.74,
+     "max": 41.48
+    }
+   }
+  },
+  "tris7990272": {
+   "pages": 5,
+   "gpuMB": 167.9,
+   "buildMs": 1804.3,
+   "verts": 3995138,
+   "tris": 7990272,
+   "leaves": 8192,
+   "perPage": {
+    "fps": 57.5,
+    "frameMs": {
+     "n": 173,
+     "mean": 17.354,
+     "p50": 17.38,
+     "p95": 18.28,
+     "p99": 22.04,
+     "max": 50.22
+    }
+   },
+   "multiDraw": {
+    "fps": 57.4,
+    "frameMs": {
+     "n": 173,
+     "mean": 17.32,
+     "p50": 17.42,
+     "p95": 17.8,
+     "p99": 17.88,
+     "max": 62.46
+    }
+   }
+  }
+ },
+ "s6": null,
+ "s7": {
+  "exports": [
+   {
+    "via": "share",
+    "name": "probe-cube.obj",
+    "bytes": 153,
+    "outcome": "shared",
+    "ms": 9244
+   }
+  ],
+  "imports": [
+   {
+    "accept": "no accept",
+    "picked": [
+     {
+      "name": "probe-cube.obj",
+      "bytes": 153,
+      "type": "model/obj",
+      "matches": "probe-cube.obj"
+     }
+    ]
+   }
+  ]
+ },
+ "s8": {
+  "launches": [
+   {
+    "t": "2026-10-13T17:26:50.999Z",
+    "standalone": false,
+    "online": true,
+    "controlled": false,
+    "crossOriginIsolated": false,
+    "swVersion": null,
+    "readyOffline": false
+   },
+   {
+    "t": "2026-10-13T17:26:57.051Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:28:19.431Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:28:38.172Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:28:51.585Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:03.844Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:04.329Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:04.805Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:05.256Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:05.729Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:06.205Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:06.794Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:07.288Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:07.805Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:08.271Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:08.749Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:09.230Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:09.685Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:10.167Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:10.639Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:11.139Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:11.606Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:12.064Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:12.532Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:29:13.010Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:30:03.248Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:30:13.217Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:33:32.848Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:33:47.676Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:34:05.565Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   },
+   {
+    "t": "2026-10-13T17:34:21.615Z",
+    "standalone": false,
+    "online": true,
+    "controlled": true,
+    "crossOriginIsolated": true,
+    "swVersion": "f214fcf689e9",
+    "readyOffline": true
+   }
+  ],
+  "browserSeesOtherContext": false,
+  "updatedAt": "2026-10-13T17:34:21.621Z",
+  "dummyMarkerSurvivedIconDelete": false
+ },
+ "s4ReloadLoop": {
+  "active": false,
+  "count": 20,
+  "runs": [
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   },
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   },
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   },
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   },
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   },
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   },
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   },
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   },
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   },
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   },
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   },
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   },
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   },
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   },
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   },
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   },
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   },
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   },
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   },
+   {
+    "coi": true,
+    "shared": {
+     "max16384": "ok",
+     "max32768": "ok",
+     "max65536": "ok"
+    }
+   }
+  ]
+ }
+}

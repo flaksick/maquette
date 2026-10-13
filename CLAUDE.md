@@ -11,10 +11,10 @@ Screen. Everything runs on the device; GitHub Pages only serves the static files
   device run still decides.
 
 ## Status
-**Phase P0 (probe).** The probe measures the nine riskiest assumptions on the reference iPad
-(memory ceiling, durable saves, engine speed, threads, GPU, Pencil/gestures, files, install). It
-runs end to end in WebKit on the Mac (`tests/s9-probe-webkit.spec.ts`). Next: device run, then
-P1a "First clay" (installable, never loses work, first brushes).
+**P0 done 2026-10-13** (device report `reports/2026-10-13-air4-safari26.6.json`; decisions in
+DECISIONS.md): 4 GB-class budget prior 1,459 MB; Rust + SIMD confirmed (composite 1.22); GPU draws
+8M tris at 57 fps; threads viable but deferred. **Now: P1a "First clay"**: the installable app that
+never loses work, with the first brushes.
 
 ## Layout
 ```
@@ -22,6 +22,7 @@ core/            Rust engine (WASM + native tests). abi.rs = exports, kernels.rs
 probe/           P0 probe page: one module per spike (s1..s8), workers, service worker
 scripts/         build-core.sh, gen-spec.mjs, gen-icons.mjs, serve.mjs, verify.mjs, deploy.mjs, hooks/
 tests/           Playwright WebKit e2e
+reports/         device reports from the probe/app diagnostics (measurements only)
 spec.yaml        feature registry (source of truth) → SPEC.md
 ```
 
