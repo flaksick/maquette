@@ -1,0 +1,14 @@
+{
+  "name": "Maquette Dummy",
+  "short_name": "Dummy",
+  "id": "./dummy.html",
+  "start_url": "./dummy.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#1b1b20",
+  "theme_color": "#1b1b20",
+  "icons": [
+    { "src": "icons/dummy-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/dummy-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
