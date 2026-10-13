@@ -7,7 +7,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const URL = process.env.MAQUETTE_APP_URL ?? 'http://localhost:8787/maquette/dev/';
+const URL = process.env.MAQUETTE_APP_URL ?? `http://localhost:${process.env.MAQUETTE_PORT ?? '8787'}/maquette/dev/`;
+// Kills target every Playwright WebKit content process on the machine, so parallel runs set
+// MAQUETTE_NO_KILL=1 and the lead runs the kill steps alone.
+const KILLS = !process.env.MAQUETTE_NO_KILL;
 const results: Record<string, unknown> = {};
 
 async function ready(page: Page): Promise<void> {
@@ -95,6 +98,7 @@ test('P1a: sculpt, undo/redo, survive kills, offline, idle, export', async () =>
     await stroke(page, 80);
     await waitSaved(page, 4);
     const h2 = (await q(page)).hash;
+    if (KILLS) {
     const killed1 = killWebContent();
     page = await reopen(ctx, page);
     page.on('pageerror', (e) => errors.push(String(e)));
@@ -111,6 +115,7 @@ test('P1a: sculpt, undo/redo, survive kills, offline, idle, export', async () =>
     const after2 = await q(page);
     results.killMidStroke = { killedProcesses: killed2, hashMatchesLastAck: after2.hash === h2 };
     expect(after2.hash).toBe(h2);
+    }
 
     // Idle is free (PLT-10): no frames while nothing changes.
     await page.waitForTimeout(1500);

@@ -20,7 +20,7 @@ test('probe runs in WebKit served like GitHub Pages', async () => {
   page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()));
   page.on('pageerror', (e) => consoleErrors.push(String(e)));
   try {
-    await page.goto(process.env.MAQUETTE_URL ?? 'http://localhost:8787/maquette/dev/probe/');
+    await page.goto(process.env.MAQUETTE_URL ?? `http://localhost:${process.env.MAQUETTE_PORT ?? '8787'}/maquette/dev/probe/`);
     // First load registers the service worker, which reloads the page once to get isolation.
     await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 60_000 });
     await page.waitForLoadState('load');
