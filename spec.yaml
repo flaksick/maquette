@@ -1,0 +1,195 @@
+# Maquette feature registry: the single source of truth for what the app must do.
+# SPEC.md is generated from this file (`npm run spec`). Status is computed from tagged test
+# results and device reports, never written here. Tiers: D daily, R regular, N niche.
+# `phase` is when the feature first ships; `note` records staged delivery.
+
+areas:
+  PLT: Platform, install, offline, lifecycle
+  PRJ: Projects and persistence
+  SCN: Scene and objects
+  PRM: Primitives and creation
+  IMP: Import
+  NAV: Navigation and input
+  STK: Stroke engine
+  BRS: Brushes
+  SYM: Symmetry
+  TOP: Topology and detail
+  FLT: Filters
+  MSK: Masking, selection, visibility
+  XFM: Transforms
+  BOO: Booleans and trimming
+  PNT: Paint, materials, viewport look
+  LYR: Sculpt layers
+  UND: Undo and redo
+  EXP: Export and sharing
+
+phases: [P0, P1a, P1b, P2, P3, P4, P5, P6, P7]
+
+universal_gates:
+  - undoable and journaled (once UND-1 and PRJ-3 exist)
+  - symmetric where meaningful (SYM-1)
+  - mask-respecting (from P2, when MSK-1 lands)
+  - mesh validator passes after every operation in tests
+brush_gates:
+  - golden profile on a reference plane or sphere
+  - mask immunity (from P2)
+  - mirror exactness 1e-6
+  - no NaN or degenerate triangles
+  - ms per dab at the reference mesh on the reference device
+
+features:
+  # ---------- PLT ----------
+  - {id: PLT-1, tier: D, phase: P1a, name: Home Screen install, done_when: "Add to Home Screen, open once online; 'Ready offline' only after every file is SHA-verified; standalone in both orientations", test: "manifest lint; device checklist"}
+  - {id: PLT-2, tier: D, phase: P1a, name: Offline cold launch, on-device only, done_when: "Airplane-mode cold launch reopens the last project in <= 3 s (1M tris); every feature works offline; only network use is the own-file update check, with a Settings toggle (off -> manual button)", test: "WebKit offline e2e runs the full suite offline; e2e network log: non-own-origin requests = 0; bundle audit"}
+  - {id: PLT-3, tier: D, phase: P1a, note: "basic in P1a, full in P1b", name: Safe updates, done_when: "Downloads silently; activates on a clean cold launch; immutable versions; two failed boots revert; migrations copy-on-write until the version is marked good", test: "e2e v1 -> v2 -> bad v3 -> auto-revert"}
+  - {id: PLT-4, tier: D, phase: P1b, name: Persistent storage, done_when: "persist() requested at first save; usage and quota shown", test: "diagnostics numbers"}
+  - {id: PLT-5, tier: D, phase: P1a, name: Lifecycle safety, done_when: "Durability never relies on lifecycle events; a killed or silently reloaded app reopens to the same project; on resume, GL context loss or a blank canvas (1-pixel readback) rebuilds the GPU mirror in <= 1 s", test: "device: 20 background/resume cycles; balloon-kill loop"}
+  - {id: PLT-6, tier: D, phase: P1b, name: Browser-gesture suppression, done_when: "No page zoom, scroll, selection, callout, magnifier or back-swipe while sculpting", test: "counts of viewport-scale changes, scrolls, selections, contextmenu, pointercancel = 0 over a scripted checklist"}
+  - {id: PLT-7, tier: D, phase: P1a, name: Engine crash containment, done_when: "A WASM trap leaves the UI alive and reports it; the engine restarts in-session if re-instantiation is safe (S1), otherwise 'Saved. Swipe-close and reopen'", test: "injected trap -> recovered hash = last journaled"}
+  - {id: PLT-8, tier: D, phase: P1b, name: Device budgets, done_when: "Lab-measured class prior + speed benchmark + adaptive learning; every limit shown with its source; over-budget operations refused before they run", test: "diagnostics; pre-flight refusal tests"}
+  - {id: PLT-9, tier: R, phase: P0, name: Diagnostics, done_when: "Capabilities, benchmarks, storage, memory ledger, crash log; JSON shared via the share sheet or AirDrop, never auto-posted", test: "itself"}
+  - {id: PLT-10, tier: D, phase: P1a, name: Idle is free, done_when: "Nothing changing -> no frames rendered and no engine work", test: "frame counter over a 10 s idle window = 0"}
+  - {id: PLT-11, tier: D, phase: P1b, name: Disk-full policy, done_when: "Low quota or disk blocks growth-causing edits with a banner and offers backup or purge; never a half-written project", test: "quota-fill e2e"}
+  - {id: PLT-12, tier: D, phase: P1a, name: On-device crash log, done_when: "Unclean exits, context losses and memory high-water at exit are recorded and shown in Diagnostics", test: "balloon kill -> log entry present"}
+  - {id: PLT-13, tier: D, phase: P1a, name: Storage-unavailable mode, done_when: "If OPFS is unavailable (private browsing, ephemeral contexts), the app says so before any work starts and never pretends to save", test: "WebKit ephemeral context e2e: warning shown, no silent save"}
+
+  # ---------- PRJ ----------
+  - {id: PRJ-1, tier: D, phase: P1b, note: "basic in P1b, full in P2", name: Gallery, done_when: "Thumbnails, name, date, size, polys; new, open, rename, duplicate, delete (+30-day Recently Deleted)", test: e2e}
+  - {id: PRJ-2, tier: D, phase: P1a, name: Project format, done_when: "Node-chunked binary + JSON manifest, per-chunk checksums, schema version and migrations", test: "round-trip hash; migration fixtures"}
+  - {id: PRJ-3, tier: D, phase: P1a, name: Journal and incremental checkpoints, done_when: "Stroke after-state durable p99 <= 100 ms after stroke end; undo/redo journaled; dirty-node checkpoint when idle >= 2 s or journal > max(64 MB, compressed mesh); no save-caused frame > 20 ms", test: "device trace"}
+  - {id: PRJ-4, tier: D, phase: P1a, name: Crash recovery, done_when: "Checkpoint + journal; stops at the first bad record and reports 'recovered to stroke N'", test: "200 native + 20 WebKit (SIGKILL) + 10 device balloon kills: recovered = last acknowledged"}
+  - {id: PRJ-5, tier: D, phase: P1b, name: Project file in/out, done_when: ".maquette file via share sheet <-> Files; re-import hash-identical", test: e2e}
+  - {id: PRJ-6, tier: D, phase: P1b, name: Back up all + reminder, done_when: "One zip of all projects; gallery shows days since last backup (the iPad holds the only copy)", test: e2e}
+  - {id: PRJ-7, tier: R, phase: P6, name: Named versions, done_when: "Save a version; restore as a new project", test: e2e}
+  - {id: PRJ-8, tier: R, phase: P5, name: Storage manager, done_when: "Per-project size; purge spill and journals", test: e2e}
+  - {id: PRJ-9, tier: D, phase: P1b, name: Units and import-scale detection, done_when: "Project units (mm/cm/m); import guesses units from the bounding box and asks; drives STL mm", test: fixtures}
+  - {id: PRJ-10, tier: D, phase: P1a, name: View and tool state, done_when: "Camera, active tool and brush settings saved separately from the mesh journal", test: "relaunch e2e"}
+  - {id: PRJ-11, tier: R, phase: P1b, name: Preferences and presets file, done_when: "Global settings and brush presets survive projects and updates", test: e2e}
+
+  # ---------- SCN / PRM ----------
+  - {id: SCN-1, tier: D, phase: P2, name: Multiple objects, done_when: "Add, tap-select, hide, rename, duplicate, delete, outliner; only the active object sculpts", test: e2e}
+  - {id: SCN-2, tier: R, phase: P3, name: Merge / separate loose parts, done_when: "Counts conserved; attributes carried", test: unit}
+  - {id: SCN-3, tier: N, phase: P7, name: "Instances, hierarchy, repeaters, lattice", done_when: "Deferred: kitbashing and stylized work, not single-piece sculpting", test: "-"}
+  - {id: SCN-4, tier: N, phase: P7, name: Live link to Blender, done_when: "Deferred: the share sheet covers the hand-off", test: "-"}
+  - {id: PRM-1, tier: D, phase: P1a, name: Quad sphere, done_when: "All-quad cube-sphere; resolution slider shows polys; radius error < 0.5%", test: unit}
+  - {id: PRM-2, tier: D, phase: P2, name: Other primitives, done_when: "Cube, cylinder, cone, torus, plane, capsule, icosphere; parametric until first sculpt; watertight (plane: boundary)", test: "unit per primitive"}
+  - {id: PRM-3, tier: R, phase: P6, name: Tube / Lathe from a curve, done_when: "Radius profile along a drawn curve; lathe revolve", test: "unit + e2e"}
+  - {id: PRM-4, tier: R, phase: P6, name: Extract shell from mask, done_when: "Watertight; thickness slider", test: unit}
+
+  # ---------- IMP ----------
+  - {id: IMP-0, tier: D, phase: P1b, name: Import cleanup, done_when: "Orient each component, split non-manifold edges/verts, drop duplicate and degenerate faces, report counts", test: "defect fixtures"}
+  - {id: IMP-1, tier: D, phase: P1b, note: "groups merged in P1b; groups -> objects in P2", name: OBJ import, done_when: "Picker without an accept filter (extension checked in JS), drag-and-drop; tris/quads/n-gons kept as polygon runs; vertex colors", test: "Blender-made fixtures: counts exact"}
+  - {id: IMP-2, tier: D, phase: P1b, name: STL import, done_when: "Binary and ASCII; tolerance weld", test: "fixtures: weld count exact"}
+  - {id: IMP-3, tier: R, phase: P4, name: PLY import, done_when: "Binary and ASCII with colors", test: fixtures}
+  - {id: IMP-4, tier: R, phase: P4, name: glTF / GLB import, done_when: "Meshes, node transforms, vertex colors", test: fixtures}
+  - {id: IMP-5, tier: R, phase: P4, name: Large streaming import, done_when: "Sliced parse, no UI freeze; 2M-tri OBJ <= 8 s on the reference device; over budget -> offer decimate-to-budget", test: "device perf"}
+  - {id: IMP-6, tier: R, phase: P4, name: Import report and repair, done_when: "Holes, scale, one-tap fixes, voxel rebuild", test: "defect fixtures"}
+  - {id: IMP-7, tier: D, phase: P3, name: Reference images, done_when: "Photo plane: opacity, lock, snap to front/side/top", test: e2e}
+  - {id: IMP-8, tier: N, phase: P7, name: "FBX, USDZ import", done_when: "Deferred: OBJ/GLB cover Blender and ZBrush round-trips", test: "-"}
+
+  # ---------- NAV ----------
+  - {id: NAV-1, tier: D, phase: P1a, name: Orbit / pan / zoom, done_when: "Turntable orbit (1 finger), pan (2), pinch zoom about the touch point, pivot on the surface; 60 fps at the measured comfortable polycount", test: "frame-barcode harness"}
+  - {id: NAV-2, tier: D, phase: P1a, note: "buttons in P1a, taps in P1b", name: Undo / redo gestures and buttons, done_when: "2-finger tap = undo (< 250 ms, < 10 px, never inside a pinch); buttons always shown; 3-finger redo only if S6 shows the system Undo bar stays away", test: "0 false fires on 50 recorded pinch traces"}
+  - {id: NAV-3, tier: D, phase: P1a, name: Pencil sculpts, fingers navigate, done_when: "Touches ignored while the pen is down; 'finger sculpts' option", test: e2e}
+  - {id: NAV-4, tier: D, phase: P1a, note: "frame/reset in P1a; view cube, ortho, FOV in P3", name: View tools, done_when: "Frame, reset, view-cube snaps, ortho/persp, FOV", test: e2e}
+  - {id: NAV-5, tier: D, phase: P2, name: Hold modifiers, done_when: "Smooth / Invert / Mask hold-buttons (Pencil double-tap, squeeze and barrel roll are not exposed to the web)", test: e2e}
+  - {id: NAV-6, tier: D, phase: P1a, name: Radius and strength sliders, done_when: "Edge sliders with live cursor preview", test: e2e}
+  - {id: NAV-7, tier: R, phase: P3, name: Hardware keyboard, done_when: "Smooth/invert modifiers, undo/redo, radius, brush hotkeys", test: e2e}
+  - {id: NAV-8, tier: R, phase: P7, name: Pencil hover cursor, done_when: "Deferred: cannot be verified on the reference device", test: "-"}
+  - {id: NAV-9, tier: R, phase: P5, name: Left-handed layout, UI scale, done_when: "Mirrored layout and UI scale persist", test: e2e}
+  - {id: NAV-10, tier: D, phase: P1b, name: Gesture card, done_when: "Shown on first run; re-openable", test: e2e}
+  - {id: NAV-11, tier: R, phase: P2, name: Adaptive render scale, done_when: "Lower resolution while interacting if under 60 fps; full when idle", test: "frame harness"}
+
+  # ---------- STK ----------
+  - {id: STK-1, tier: D, phase: P1a, name: Spacing and interpolation, done_when: "Dab spacing error <= 5% at any speed using coalesced Pencil samples", test: "replayed device recordings"}
+  - {id: STK-2, tier: D, phase: P1a, name: Pressure mapping, done_when: "Pressure -> radius and/or strength, editable curve, smoothing", test: unit}
+  - {id: STK-3, tier: D, phase: P2, name: Stabilizer, done_when: "Lazy radius + smoothing, catch-up on lift; jitter RMS -70% (also absorbs pre-26.2 integer coordinates)", test: "jittered trace"}
+  - {id: STK-4, tier: D, phase: P2, name: Falloff curves and hardness, done_when: "Presets + custom curve; hardness remap", test: "golden profiles"}
+  - {id: STK-5, tier: R, phase: P2, name: Screen / world radius, done_when: "Both modes behave per definition", test: unit}
+  - {id: STK-6, tier: D, phase: P3, name: Front faces only, connected only, done_when: "Thin plate: back untouched; overlapping shells: only the hit shell moves", test: unit}
+  - {id: STK-7, tier: R, phase: P4, name: Alphas / stamps, done_when: "Grayscale alpha in the tangent frame; fixed/follow/random rotation; PNG import", test: "golden height image"}
+  - {id: STK-8, tier: R, phase: P2, name: Brush presets, done_when: "Saved per tool, duplicate, reset", test: e2e}
+  - {id: STK-9, tier: R, phase: P4, name: "Drag-dot, roll, line, anchored", done_when: "Each stroke method behaves per definition", test: unit}
+  - {id: STK-10, tier: D, phase: P1a, name: Brush cursor, done_when: "Surface-aligned ring with radius/strength preview", test: "visual snapshot"}
+  - {id: STK-11, tier: D, phase: P2, name: Plane sampling, accumulate, auto-smooth, done_when: "Area normal/plane from verts in radius (front-facing wins); per-brush accumulate flag; auto-smooth factor", test: golden}
+  - {id: STK-12, tier: R, phase: P6, name: Curve strokes, done_when: "Re-applying an edited curve = same result as drawing it", test: unit}
+
+  # ---------- BRS ----------
+  - {id: BRS-1, tier: D, phase: P1a, name: Draw (Standard), done_when: "Offset along area normal x falloff x strength", test: brush_gates}
+  - {id: BRS-2, tier: D, phase: P1a, name: Smooth (+ preserve volume), done_when: "<= 1% sphere volume loss over 50 dabs", test: brush_gates}
+  - {id: BRS-3, tier: D, phase: P1a, name: Move / Grab (+ Move Topological), done_when: "Center moves exactly by the stroke delta", test: brush_gates}
+  - {id: BRS-4, tier: D, phase: P1b, name: Inflate, done_when: "Sphere stays round (radial sigma < 1%)", test: brush_gates}
+  - {id: BRS-5, tier: D, phase: P1b, name: Flatten, done_when: "Converges to the plane", test: brush_gates}
+  - {id: BRS-6, tier: D, phase: P2, name: "Clay (Buildup), Clay Strips (Clay Tubes)", done_when: "Offset-plane build; square tangent falloff", test: brush_gates}
+  - {id: BRS-7, tier: D, phase: P2, name: Crease (Dam Standard), done_when: "V-profile + pinch to line", test: brush_gates}
+  - {id: BRS-8, tier: D, phase: P2, name: Pinch, done_when: "0 normal motion on a plane", test: brush_gates}
+  - {id: BRS-9, tier: D, phase: P2, name: Snake Hook, done_when: "Follows the path (adds geometry once TOP-3 lands in P3)", test: brush_gates}
+  - {id: BRS-10, tier: D, phase: P2, name: Layer, done_when: "Height capped regardless of dab count", test: brush_gates}
+  - {id: BRS-11, tier: R, phase: P2, name: "Fill, Scrape, Planar", done_when: "One Plane primitive with one-sided limits", test: brush_gates}
+  - {id: BRS-12, tier: R, phase: P3, name: "Blob, Draw Sharp, Thumb/Nudge", done_when: "Each per definition", test: brush_gates}
+  - {id: BRS-13, tier: R, phase: P3, name: Relax / Slide-relax, done_when: "Edge-length variance falls; Hausdorff <= 0.1%", test: brush_gates}
+  - {id: BRS-14, tier: R, phase: P6, name: Elastic Grab (Kelvinlets), done_when: "Matches the closed form within 1e-4", test: brush_gates}
+  - {id: BRS-15, tier: R, phase: P6, name: Pose, done_when: "Flood-fill segments, forward IK, smooth seam", test: brush_gates}
+  - {id: BRS-16, tier: N, phase: P6, name: "Clay Thumb, Boundary, Multiplane Scrape, Rotate", done_when: "Each per definition", test: brush_gates}
+  - {id: BRS-17, tier: N, phase: P7, name: Cloth, done_when: "Deferred: needs a stable cloth solver; occasional use", test: "-"}
+  - {id: BRS-18, tier: R, phase: P4, name: Morph / erase-layer, done_when: "Full strength restores the stored state exactly", test: brush_gates}
+
+  # ---------- SYM ----------
+  - {id: SYM-1, tier: D, phase: P1a, note: "X in P1a; any X/Y/Z combination in P2", name: Mirror symmetry, done_when: "Local space, plane indicator, feathered at the plane; mirror exact for sculpt, mask, paint; no double strength at the plane", test: "mirror tests"}
+  - {id: SYM-2, tier: R, phase: P3, name: Radial symmetry, done_when: "2-64 repeats; n-fold invariance <= 1e-6", test: unit}
+  - {id: SYM-3, tier: R, phase: P3, name: Symmetrize, done_when: "+X -> -X; symmetric, welded, manifold", test: unit}
+  - {id: SYM-4, tier: N, phase: P7, name: Topological symmetry, done_when: "Deferred: only for asymmetrically posed meshes", test: "-"}
+
+  # ---------- TOP / FLT ----------
+  - {id: TOP-1, tier: D, phase: P2, name: Voxel remesh, done_when: "Target-polycount slider + voxel checker preview; watertight with 0 non-manifold across 1,000 fuzz shapes; Hausdorff <= 1 voxel; fills holes and merges self-intersections; keep-sharp reproject; mask/color reprojected; 500k-quad output <= 4 s on the reference device; sliced, cancellable, view stays live", test: "fuzz + device perf"}
+  - {id: TOP-2, tier: R, phase: P2, note: "union in P2; subtract in P6", name: Voxel union / subtract, done_when: "SDF min/max; watertight", test: unit}
+  - {id: TOP-3, tier: D, phase: P3, name: Dynamic topology, done_when: "Constant/screen/brush detail; refine/collapse toggles; flood fill; mask/color interpolated; no slot moves mid-stroke; 'detail capped' at budget; <= 8 ms/dab at 1M; 10k-op fuzz with undo/redo/kills -> 0 validator failures", test: "fuzz + device perf"}
+  - {id: TOP-4, tier: D, phase: P4, name: Multires levels, done_when: "Catmull-Clark; per-base-face displacement grids; add/step/delete levels; detail carried in tangent space (correlation >= 0.99 after a 45-degree bend); level switch <= 1 s at 2M", test: "unit + device perf"}
+  - {id: TOP-5, tier: R, phase: P4, name: Reverse subdivision, done_when: "Rebuilds regular imports; refuses others with a reason", test: fixtures}
+  - {id: TOP-6, tier: R, phase: P3, note: "mask/color in P3; face-group borders in P4", name: Decimate, done_when: "1M -> 100k <= 3 s; Hausdorff <= 0.5% of bbox diagonal", test: "unit + device perf"}
+  - {id: TOP-7, tier: R, phase: P4, name: Mesh cleanup, done_when: "Weld, degenerates, fill holes", test: "defect fixtures"}
+  - {id: TOP-8, tier: D, phase: P1a, name: Poly and memory HUD, done_when: "Tris, verts, level, memory ledger vs budget", test: e2e}
+  - {id: TOP-9, tier: R, phase: P7, name: Quad remesher, done_when: "Deferred: candidates @autoremesher/wasm (MIT), QuadriFlow (MIT core), Instant Meshes (BSD-3)", test: "-"}
+  - {id: TOP-10, tier: R, phase: P4, name: Detail projection, done_when: "Project a source mesh's detail onto the active mesh or level; Hausdorff to source <= 0.2%", test: unit}
+  - {id: FLT-1, tier: R, phase: P3, name: Mesh filters, done_when: "Smooth, inflate, scale, sphere, relax, sharpen, enhance details, random; mask-respecting; sliced", test: unit}
+  - {id: FLT-2, tier: N, phase: P5, name: Color filters, done_when: "Fill, HSV, brightness/contrast", test: unit}
+
+  # ---------- MSK / XFM / BOO ----------
+  - {id: MSK-1, tier: D, phase: P2, name: Mask brush + overlay, done_when: "Masked verts immune in every brush test", test: brush_gates}
+  - {id: MSK-2, tier: R, phase: P3, name: Mask operations, done_when: "Invert, clear, blur, sharpen, grow, shrink, contrast", test: unit}
+  - {id: MSK-3, tier: D, phase: P3, name: Shape selection, done_when: "Lasso, polygon, rectangle, ellipse, line (shared by mask, hide, trim); front-face option; exact on test meshes", test: unit}
+  - {id: MSK-4, tier: R, phase: P4, name: Mask from cavity/curvature, done_when: "Sign matches curvature on the test surface", test: unit}
+  - {id: MSK-5, tier: R, phase: P6, name: Mask expand (geodesic), done_when: "Monotone geodesic field", test: unit}
+  - {id: MSK-6, tier: R, phase: P6, name: Extract / split by mask, done_when: "Watertight results", test: unit}
+  - {id: MSK-7, tier: R, phase: P4, name: Face groups, done_when: "Paint, auto (normals/loose parts), hide/isolate, mask-by-group", test: unit}
+  - {id: MSK-8, tier: R, phase: P3, name: Hide / show, done_when: "Hidden faces skip brushes and drawing", test: unit}
+  - {id: XFM-1, tier: D, phase: P2, name: Object gizmo, done_when: "Move/rotate/scale, local/world, numeric entry", test: e2e}
+  - {id: XFM-2, tier: D, phase: P3, name: Mask-aware gizmo (posing), done_when: "Masked area fixed exactly; smooth transition at the mask edge", test: unit}
+  - {id: XFM-3, tier: R, phase: P3, name: Snapping, done_when: "15-degree rotation and grid snaps", test: unit}
+  - {id: XFM-4, tier: R, phase: P3, name: Apply transform, reset origin, mirror object, done_when: "Each exact", test: unit}
+  - {id: BOO-1, tier: R, phase: P6, name: Exact booleans, done_when: "Union/difference/intersect via manifold-3d; watertight", test: unit}
+  - {id: BOO-2, tier: R, phase: P6, name: Trim with cap, done_when: "Lasso/box/line; watertight; planar cap", test: unit}
+  - {id: BOO-3, tier: R, phase: P6, name: Plane split, done_when: "Splits into two watertight objects", test: unit}
+
+  # ---------- PNT / LYR / UND / EXP ----------
+  - {id: PNT-1, tier: R, phase: P5, name: Vertex color paint, done_when: "Symmetric, undoable, exported", test: e2e}
+  - {id: PNT-2, tier: N, phase: P5, name: Roughness / metalness paint, done_when: "Bytes allocated only when painted", test: unit}
+  - {id: PNT-3, tier: D, phase: P1a, note: "one matcap in P1a; library >= 8 + import in P5", name: Matcaps, done_when: "Rendered with Blender at build time", test: "visual snapshot"}
+  - {id: PNT-4, tier: R, phase: P5, name: PBR + HDRI, done_when: ">= 4 environments prefiltered at build; exposure, rotation", test: "visual snapshot"}
+  - {id: PNT-5, tier: R, phase: P5, name: "SSAO, curvature, outline, AgX, FXAA", done_when: "60-fps polycount with SSAO >= 85% of without", test: "frame harness"}
+  - {id: PNT-6, tier: R, phase: P3, name: Wireframe, flat/smooth, done_when: "Wireframe shows polygon runs (quads), not triangles", test: "visual snapshot"}
+  - {id: PNT-7, tier: R, phase: P5, name: Background, done_when: "Color, gradient, environment", test: e2e}
+  - {id: PNT-8, tier: N, phase: P7, name: UV texture painting, done_when: "Deferred: needs UV unwrap; vertex paint covers sculpt coloring", test: "-"}
+  - {id: LYR-1, tier: R, phase: P4, note: "GLB morph export in P5", name: Sculpt layers, done_when: "Intensity -1..2, visibility, record, merge; survive dyntopo (interpolate) and remesh (reproject, lossy); toggle exact 1e-6; intensity linear", test: unit}
+  - {id: UND-1, tier: D, phase: P1a, note: "RAM-budgeted in P1a; spill to OPFS in P2", name: Undo / redo, done_when: "Every change; exact pre-state (hash); <= 50 ms per stroke at 2M; history budget in MB + max steps; heavy-op undo points at the pre-op checkpoint; history does not survive a relaunch (stated in UI)", test: "unit + device perf"}
+  - {id: UND-2, tier: N, phase: P6, name: History panel, done_when: "Shows and jumps to any step", test: e2e}
+  - {id: EXP-1, tier: D, phase: P1a, name: OBJ export, done_when: "Polygon runs and vertex colors; Blender 5.1 oracle: counts exact, bbox <= 1e-4", test: oracle}
+  - {id: EXP-2, tier: D, phase: P1b, name: STL export, done_when: "Binary; watertight warning; mm via PRJ-9", test: oracle}
+  - {id: EXP-3, tier: R, phase: P5, name: PLY export, done_when: "With colors", test: oracle}
+  - {id: EXP-4, tier: R, phase: P5, name: GLB export, done_when: "Objects, transforms, colors, PBR, layer morphs", test: oracle}
+  - {id: EXP-5, tier: R, phase: P5, name: USDZ + View in AR, done_when: "Opens in AR Quick Look on the device", test: device}
+  - {id: EXP-6, tier: R, phase: P5, name: Export options, done_when: "Selection, level, decimate-on-export, triangulate, scale", test: oracle}
+  - {id: EXP-7, tier: D, phase: P1a, name: Two-step export, done_when: "Prepare (progress) then Share (fresh tap) to Files/AirDrop; download fallback; re-import of the shared file is hash-identical; 200 MB works", test: "device + e2e"}
+  - {id: EXP-8, tier: R, phase: P5, name: Screenshot and turntable, done_when: "Up to 4x, transparent background; turntable video", test: e2e}
+  - {id: EXP-9, tier: N, phase: P7, name: UV unwrap + map baking, done_when: "Deferred: game-asset pipeline", test: "-"}
+  - {id: EXP-10, tier: R, phase: P5, note: "hollowing deferred to P7", name: Print prep, done_when: "Watertight check + dimensions", test: unit}

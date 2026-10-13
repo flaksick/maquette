@@ -1,0 +1,24 @@
+#!/bin/sh
+# Invariant 11: nothing secret reaches the public repo.
+# Scans the whole history being pushed, the built deploy tree, and the remote URLs.
+root="$(git rev-parse --show-toplevel)"
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "pre-push: gitleaks not installed (brew install gitleaks); refusing to push." >&2
+  exit 1
+fi
+gitleaks git "$root" --redact --no-banner -l warn || {
+  echo "pre-push: gitleaks found a possible secret in git history. Push blocked." >&2
+  exit 1
+}
+if [ -d "$root/deploy" ]; then
+  gitleaks dir "$root/deploy" --redact --no-banner -l warn || {
+    echo "pre-push: gitleaks found a possible secret in the built deploy tree. Push blocked." >&2
+    exit 1
+  }
+fi
+# A token inside a remote URL (https://<token>@github.com/...) would leak into logs and configs.
+if git -C "$root" remote -v | grep -Eq 'https://[^/@ ]+@'; then
+  echo "pre-push: a remote URL contains credentials. Use gh's credential helper instead. Push blocked." >&2
+  exit 1
+fi
+exit 0

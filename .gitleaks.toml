@@ -1,0 +1,15 @@
+# Secret scanning (invariant 11): default rules, minus build outputs and third-party packages.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "dependencies and build outputs are not authored here"
+paths = [
+  '''(^|/)node_modules/''',
+  '''(^|/)core/target/''',
+  '''(^|/)dist/''',
+  '''(^|/)deploy(-e2e)?/''',
+  '''(^|/)test-results/''',
+  '''(^|/)playwright-report/''',
+  '''(^|/)wasm/''',
+]
