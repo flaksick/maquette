@@ -3,8 +3,15 @@
 
 pub mod abi;
 pub mod bvh;
+pub mod engine;
+pub mod gpu;
+pub mod history;
 pub mod kernels;
+pub mod mat4;
 pub mod math;
+pub mod objio;
+pub mod mesh;
 pub mod simd;
 pub mod sphere;
+pub mod store;
 pub mod topo;

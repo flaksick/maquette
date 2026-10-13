@@ -14,10 +14,12 @@
     "isolatedModules": true,
     "types": [
       "vite/client"
-    ]
+    ],
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact"
   },
   "include": [
     "probe/src",
-    "src"
+    "app/src"
   ]
 }

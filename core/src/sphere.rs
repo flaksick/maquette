@@ -94,10 +94,12 @@ pub fn cube_sphere(n: u32) -> TriMesh {
                     let qb = vertex_id(lattice(u + 1, v), n);
                     let qc = vertex_id(lattice(u + 1, v + 1), n);
                     let qd = vertex_id(lattice(u, v + 1), n);
+                    // Both windings are written as in-order fans from qa (polygon-run invariant:
+                    // triangle k+1 starts with v0 and its v1 is triangle k's v2).
                     if positive {
                         tris.extend_from_slice(&[qa, qb, qc, qa, qc, qd]);
                     } else {
-                        tris.extend_from_slice(&[qa, qc, qb, qa, qd, qc]);
+                        tris.extend_from_slice(&[qa, qd, qc, qa, qc, qb]);
                     }
                     poly_next.extend_from_slice(&[1, 0]);
                 }

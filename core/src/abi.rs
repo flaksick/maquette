@@ -185,3 +185,330 @@ pub extern "C" fn mq_rebuild(h: u32, leaf_max: u32) -> u32 {
 pub extern "C" fn mq_checksum(h: u32) -> f64 {
     with_scene(h, |s| s.checksum()).unwrap_or(f64::NAN)
 }
+
+// ======================= App engine (P1a) =======================
+// One engine per instance (invariant 9: one core instance per session). JS writes the camera
+// and stroke samples into shared buffers, calls in, and reads results through pointers.
+
+use crate::engine::{Camera, Engine, Tool, CAMERA_FLOATS};
+use crate::mesh::EditMesh;
+
+struct Shared {
+    camera: [f32; CAMERA_FLOATS],
+    samples: Vec<f32>,
+    hit: [f32; 8],
+    bounds: [f32; 6],
+}
+
+thread_local! {
+    static ENGINE: RefCell<Option<Box<Engine>>> = const { RefCell::new(None) };
+    static SHARED: *mut Shared = Box::into_raw(Box::new(Shared {
+        camera: [0.0; CAMERA_FLOATS],
+        samples: Vec::new(),
+        hit: [0.0; 8],
+        bounds: [0.0; 6],
+    }));
+}
+
+fn shared() -> &'static mut Shared {
+    // Single-threaded WASM instance; the box is leaked once and never freed.
+    SHARED.with(|p| unsafe { &mut **p })
+}
+
+fn with_engine<R>(f: impl FnOnce(&mut Engine) -> R) -> Option<R> {
+    ENGINE.with(|e| e.borrow_mut().as_deref_mut().map(f))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_camera_ptr() -> *mut f32 {
+    shared().camera.as_mut_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_samples_ptr(nfloats: u32) -> *mut f32 {
+    let s = shared();
+    if s.samples.len() < nfloats as usize {
+        s.samples.resize(nfloats as usize, 0.0);
+    }
+    s.samples.as_mut_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_new_sphere(n: u32, leaf_max: u32) -> u32 {
+    let mesh = EditMesh::from_trimesh(crate::sphere::cube_sphere(n.max(1)), leaf_max.max(16) as usize);
+    ENGINE.with(|e| {
+        *e.borrow_mut() = None; // free first: peak memory is one mesh, not two
+        *e.borrow_mut() = Some(Box::new(Engine::new(mesh)));
+    });
+    1
+}
+
+/// Loads a project from its topology and positions files. Returns 1, or a negative error code.
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_load(topo: *const u8, topo_len: u32, pos: *const u8, pos_len: u32) -> i32 {
+    let t = unsafe { std::slice::from_raw_parts(topo, topo_len as usize) };
+    let p = unsafe { std::slice::from_raw_parts(pos, pos_len as usize) };
+    match crate::store::load(t, p) {
+        Ok(mesh) => {
+            ENGINE.with(|e| {
+                *e.borrow_mut() = None;
+                *e.borrow_mut() = Some(Box::new(Engine::new(mesh)));
+            });
+            1
+        }
+        Err(err) => -(err as i32) - 1,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_set_brush(tool: u32, radius_px: f32, strength: f32, flags: u32, gamma: f32, spacing: f32) {
+    with_engine(|e| {
+        e.brush.tool = Tool::from_u32(tool);
+        e.brush.radius_px = radius_px.max(1.0);
+        e.brush.strength = strength.clamp(0.0, 1.0);
+        e.brush.pressure_radius = flags & 1 != 0;
+        e.brush.pressure_strength = flags & 2 != 0;
+        e.brush.symmetry_x = flags & 4 != 0;
+        e.brush.preserve_volume = flags & 8 != 0;
+        e.brush.gamma = gamma.clamp(0.1, 5.0);
+        e.brush.spacing = spacing.clamp(0.02, 2.0);
+    });
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_camera_commit() {
+    let cam = Camera::from_slice(&shared().camera);
+    with_engine(|e| e.cam = cam);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_stroke_begin(x: f32, y: f32, p: f32) -> u32 {
+    with_engine(|e| e.stroke_begin(x, y, p) as u32).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_stroke_move(nsamples: u32) -> u32 {
+    let s = &shared().samples;
+    let n = (nsamples as usize * 3).min(s.len());
+    with_engine(|e| e.stroke_move(&s[..n])).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_stroke_end() -> u32 {
+    with_engine(|e| e.stroke_end() as u32).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_undo() -> u32 {
+    with_engine(|e| e.undo() as u32).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_redo() -> u32 {
+    with_engine(|e| e.redo() as u32).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_out_ptr() -> *const u8 {
+    with_engine(|e| e.out.as_ptr()).unwrap_or(std::ptr::null())
+}
+
+/// Applies one journal record. Returns its sequence number, or a negative error code.
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_apply_record(ptr: *const u8, len: u32) -> i64 {
+    let b = unsafe { std::slice::from_raw_parts(ptr, len as usize) };
+    with_engine(|e| match e.apply_journal_record(b) {
+        Ok((seq, _)) => seq as i64,
+        Err(err) => -(err as i64) - 1,
+    })
+    .unwrap_or(-100)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_set_seq(seq: u32) {
+    with_engine(|e| e.seq = seq);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_seq() -> u32 {
+    with_engine(|e| e.seq).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_frame_update() -> u32 {
+    with_engine(|e| e.frame_update() as u32).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_gpu_page_count() -> u32 {
+    with_engine(|e| e.gpu.pages.len() as u32).unwrap_or(0)
+}
+
+/// [vertex bytes, index count] of a page.
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_gpu_page_sizes(p: u32, out: *mut u32) {
+    with_engine(|e| {
+        if let Some(pg) = e.gpu.pages.get(p as usize) {
+            unsafe {
+                *out = pg.vertex_bytes() as u32;
+                *out.add(1) = pg.nindices;
+            }
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_gpu_full_page(p: u32) -> u32 {
+    with_engine(|e| {
+        let mesh = &e.mesh;
+        e.gpu.full_page(mesh, p as usize);
+        e.gpu.ncmds() as u32
+    })
+    .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_gpu_arena_ptr() -> *const u8 {
+    with_engine(|e| e.gpu.arena.as_ptr()).unwrap_or(std::ptr::null())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_gpu_cmds_ptr() -> *const u32 {
+    with_engine(|e| e.gpu.cmds.as_ptr()).unwrap_or(std::ptr::null())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_positions_ptr() -> *const f32 {
+    with_engine(|e| e.mesh.positions.as_ptr()).unwrap_or(std::ptr::null())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_positions_bytes() -> u32 {
+    with_engine(|e| (e.mesh.positions.len() * 4) as u32).unwrap_or(0)
+}
+
+/// Serializes the topology file into the output buffer; returns its length.
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_topo_bytes() -> u32 {
+    with_engine(|e| {
+        e.out = crate::store::topo_bytes(&e.mesh);
+        e.out.len() as u32
+    })
+    .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_checkpoint_collect() -> u32 {
+    with_engine(|e| e.checkpoint_collect() as u32).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_ckpt_ptr() -> *const u32 {
+    with_engine(|e| e.ckpt_ranges.as_ptr()).unwrap_or(std::ptr::null())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_ckpt_seq() -> u32 {
+    with_engine(|e| e.ckpt_seq).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_checkpoint_failed() {
+    with_engine(|e| e.checkpoint_failed());
+}
+
+/// Writes the OBJ into the output buffer; returns its length.
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_export_obj(out_faces: *mut u32) -> u32 {
+    with_engine(|e| {
+        let mut buf = std::mem::take(&mut e.out);
+        let st = crate::objio::write_obj(&e.mesh, &mut buf);
+        e.out = buf;
+        unsafe { *out_faces = st.faces as u32 };
+        e.out.len() as u32
+    })
+    .unwrap_or(0)
+}
+
+/// [nverts, ntris, nleaves, npages, undo depth, redo depth, undo KiB, seq, GPU vertex KiB,
+///  GPU index KiB, dropped undo steps, checkpoint-dirty leaves]
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_stats(out: *mut u32) {
+    with_engine(|e| {
+        let vb: usize = e.gpu.pages.iter().map(|p| p.vertex_bytes()).sum();
+        let ib: usize = e.gpu.pages.iter().map(|p| p.nindices as usize * 4).sum();
+        let v = [
+            e.mesh.nverts() as u32,
+            e.mesh.ntris() as u32,
+            e.mesh.nleaves() as u32,
+            e.gpu.pages.len() as u32,
+            e.hist.undo.len() as u32,
+            e.hist.redo.len() as u32,
+            (e.hist.bytes() / 1024) as u32,
+            e.seq,
+            (vb / 1024) as u32,
+            (ib / 1024) as u32,
+            e.hist.dropped,
+            e.dirty_leaf_count() as u32,
+        ];
+        for (i, x) in v.iter().enumerate() {
+            unsafe { *out.add(i) = *x };
+        }
+    });
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_hash() -> u64 {
+    with_engine(|e| e.mesh.position_hash()).unwrap_or(0)
+}
+
+/// Surface under a screen point: writes [x, y, z, nx, ny, nz] to the hit buffer.
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_raycast(x: f32, y: f32) -> u32 {
+    with_engine(|e| match e.raycast_screen(x, y) {
+        Some(h) => {
+            let s = shared();
+            s.hit[..3].copy_from_slice(&h.point);
+            s.hit[3..6].copy_from_slice(&h.normal);
+            1
+        }
+        None => 0,
+    })
+    .unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_hit_ptr() -> *const f32 {
+    shared().hit.as_ptr()
+}
+
+/// [x, y, z, nx, ny, nz, world radius] of the last dab (brush cursor).
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_last_dab_ptr() -> *const f32 {
+    with_engine(|e| e.last_dab.as_ptr()).unwrap_or(std::ptr::null())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_bounds_ptr() -> *const f32 {
+    with_engine(|e| {
+        let (lo, hi) = e.mesh.bounds();
+        let s = shared();
+        s.bounds[..3].copy_from_slice(&lo);
+        s.bounds[3..].copy_from_slice(&hi);
+    });
+    shared().bounds.as_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_set_history(budget_mb: u32, max_steps: u32) {
+    with_engine(|e| {
+        e.hist.budget_bytes = budget_mb as usize * 1024 * 1024;
+        e.hist.max_steps = max_steps.max(1) as usize;
+    });
+}
+
+/// Deliberate trap for the crash-containment test (PLT-7): panic = abort = WASM trap.
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_debug_trap() {
+    panic!("debug trap requested");
+}

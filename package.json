@@ -12,7 +12,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "spec": "node scripts/gen-spec.mjs",
     "verify": "node scripts/verify.mjs",
-    "deploy:dev": "node scripts/deploy.mjs dev"
+    "deploy:dev": "node scripts/deploy.mjs dev",
+    "app:dev": "vite --config vite.app.config.ts --mode dev --host",
+    "app:build": "npm run icons && npm run core && vite build --config vite.app.config.ts --mode dev && vite build --config vite.app.config.ts --mode prod"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.0",
@@ -20,5 +22,9 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
     "yaml": "^2.9.1"
+  },
+  "dependencies": {
+    "@preact/signals": "^2.11.3",
+    "preact": "^11.0.1"
   }
 }

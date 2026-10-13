@@ -66,7 +66,7 @@ function sphere(tint) {
 
 const sets = [
   ['probe/public/icons', [['probe', [140, 170, 205]], ['dummy', [150, 150, 150]]]],
-  ['public/icons', [['app', [217, 199, 179]]]],
+  ['app/public/icons', [['app', [217, 199, 179]]]],
 ];
 for (const [dir, items] of sets) {
   mkdirSync(dir, { recursive: true });
