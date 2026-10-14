@@ -9,10 +9,16 @@ import { SHEETS, ui } from './state';
 import { bus } from './bus';
 import { InputController } from './input';
 import { registerServiceWorker } from './sw-client';
+import { call, connectLibrary, onEngineMessage, openProject, refreshProjects, watchStorage } from './projects';
+import { loadPrefs, onProjectOpened, prefs, savePrefsNow, setPref } from './prefs';
 import type { FromEngine, ToEngine } from './shared/protocol';
 
 
 const persist = new PersistWorker();
+// P1b: the main thread's own port to the persist worker (projects, backups, preferences).
+connectLibrary(persist, CHANNEL);
+void loadPrefs();
+watchStorage();
 let engine: Worker | null = null;
 let canvas: HTMLCanvasElement | null = null;
 let restarts = 0;
@@ -71,7 +77,12 @@ function restartEngine(error: string): void {
 }
 
 function onEngine(m: FromEngine): void {
+  onEngineMessage(m); // projects / storage / disk state (P1b)
   switch (m.type) {
+    case 'project':
+      if (m.error) ui.notice.value = { level: 'warn', text: m.error };
+      void onProjectOpened(m);
+      break;
     case 'ready':
       ui.ready.value = true;
       onResize(); // the layout may have changed while the engine was starting
@@ -144,4 +155,12 @@ new ResizeObserver(queueResize).observe(document.getElementById('viewport')!);
 window.addEventListener('resize', queueResize);
 window.addEventListener('orientationchange', queueResize);
 document.addEventListener('visibilitychange', () => send({ type: document.visibilityState === 'visible' ? 'visible' : 'hidden' }));
-(window as unknown as { __maquette: unknown }).__maquette = { ui, query, send, input: input.stats, sheets: SHEETS };
+(window as unknown as { __maquette: unknown }).__maquette = {
+  ui,
+  query,
+  send,
+  input: input.stats,
+  sheets: SHEETS,
+  // P1b test and diagnostics hooks: the library (persist worker) and preferences.
+  library: { call, refreshProjects, openProject, prefs: () => prefs.value, setPref, savePrefsNow },
+};

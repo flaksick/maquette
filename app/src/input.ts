@@ -3,6 +3,7 @@
 // two fingers pan and pinch-zoom (NAV-1). Touches are ignored while the Pencil is down (palm).
 // Coalesced Pencil samples are forwarded as [x, y, pressure] triples in CSS pixels (STK-1).
 import type { ToEngine } from './shared/protocol';
+import { TAP_MAX_DRIFT_PX, TAP_MAX_MS, TwoFingerTap } from './taps';
 
 type Send = (m: ToEngine, transfer?: Transferable[]) => void;
 
@@ -21,6 +22,8 @@ export interface InputStats {
   fractionalCoords: number;
   touchesIgnoredWhilePen: number;
   coalescedAvailable: boolean;
+  /** NAV-2: two-finger taps recognized (each sent one undo). */
+  twoFingerTaps: number;
 }
 
 export class InputController {
@@ -34,7 +37,14 @@ export class InputController {
     fractionalCoords: 0,
     touchesIgnoredWhilePen: 0,
     coalescedAvailable: typeof PointerEvent !== 'undefined' && typeof PointerEvent.prototype.getCoalescedEvents === 'function',
+    twoFingerTaps: 0,
   };
+  // NAV-2: two-finger tap = undo. With Finger sculpts on (NAV-3), a finger's stroke starts only
+  // once it has moved TAP_MAX_DRIFT_PX or stayed down TAP_MAX_MS: a second finger before that
+  // makes it a gesture, so a two-finger tap never leaves a dab behind (which the undo would
+  // then remove instead of the stroke the user meant).
+  private taps = new TwoFingerTap();
+  private pendingFinger: { id: number; x: number; y: number; samples: number[]; timer: ReturnType<typeof setTimeout> } | null = null;
   private strokeStart = 0;
   private canvas: HTMLCanvasElement | null = null;
   private send: Send;
@@ -116,6 +126,27 @@ export class InputController {
       this.stats.touchesIgnoredWhilePen++; // palm
       return;
     }
+    if (e.pointerType === 'touch') this.taps.feed({ kind: 'down', id: e.pointerId, t: e.timeStamp, x: p.x, y: p.y });
+    else {
+      this.taps.spoil();
+      if (e.pointerType === 'pen') this.dropPendingFinger(); // the pen wins over a resting finger
+    }
+    if (this.pendingFinger && e.pointerType === 'touch') {
+      // A second finger before the first one's stroke began: both navigate.
+      const f = this.pendingFinger;
+      this.dropPendingFinger();
+      this.touches.set(f.id, { x: f.x, y: f.y });
+      this.send({ type: 'gesture-begin', x: f.x, y: f.y });
+      this.capture(e.pointerId);
+      this.touches.set(e.pointerId, p);
+      this.resetBaseline();
+      return;
+    }
+    if (sculpts && this.strokeId === null && e.pointerType === 'touch' && this.touches.size === 0) {
+      this.capture(e.pointerId);
+      this.pendingFinger = { id: e.pointerId, x: p.x, y: p.y, samples: [], timer: setTimeout(() => this.startPendingFinger(), TAP_MAX_MS) };
+      return;
+    }
     if (sculpts && this.strokeId === null) {
       this.strokeId = e.pointerId;
       this.strokeIsPen = e.pointerType === 'pen';
@@ -141,6 +172,25 @@ export class InputController {
     }
   }
 
+  private dropPendingFinger(): void {
+    if (this.pendingFinger) clearTimeout(this.pendingFinger.timer);
+    this.pendingFinger = null;
+  }
+
+  /** The waiting finger turned out to be a stroke: begin it where it landed, replay its path. */
+  private startPendingFinger(): void {
+    const f = this.pendingFinger;
+    if (!f) return;
+    this.dropPendingFinger();
+    this.strokeId = f.id;
+    this.strokeIsPen = false;
+    this.send({ type: 'stroke-begin', x: f.x, y: f.y, p: 1 });
+    if (f.samples.length) {
+      const samples = new Float32Array(f.samples);
+      this.send({ type: 'stroke-move', samples }, [samples.buffer]);
+    }
+  }
+
   private pressure(e: PointerEvent): number {
     if (e.pointerType === 'pen') return e.pressure > 0 ? e.pressure : 0.5;
     return 1;
@@ -155,6 +205,18 @@ export class InputController {
   }
 
   private move(e: PointerEvent): void {
+    const f = this.pendingFinger;
+    if (f && e.pointerId === f.id) {
+      const p = this.local(e);
+      this.taps.feed({ kind: 'move', id: e.pointerId, t: e.timeStamp, x: p.x, y: p.y });
+      f.samples.push(p.x, p.y, 1);
+      if (Math.hypot(p.x - f.x, p.y - f.y) >= TAP_MAX_DRIFT_PX) this.startPendingFinger();
+      return;
+    }
+    if (e.pointerType === 'touch' && e.pointerId !== this.strokeId) {
+      const p = this.local(e);
+      this.taps.feed({ kind: 'move', id: e.pointerId, t: e.timeStamp, x: p.x, y: p.y });
+    }
     if (e.pointerId === this.strokeId) {
       const events = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
       const list = events.length ? events : [e];
@@ -202,6 +264,18 @@ export class InputController {
   }
 
   private up(e: PointerEvent): void {
+    if (e.pointerType === 'touch') {
+      const p = this.local(e);
+      if (this.taps.feed({ kind: e.type === 'pointercancel' ? 'cancel' : 'up', id: e.pointerId, t: e.timeStamp, x: p.x, y: p.y })) {
+        this.stats.twoFingerTaps++;
+        this.send({ type: 'undo' });
+      }
+    }
+    if (this.pendingFinger?.id === e.pointerId) {
+      // Lifted before it moved or stayed: one finger tapped once, which sculpts a dab.
+      if (e.type === 'pointercancel') this.dropPendingFinger();
+      else this.startPendingFinger();
+    }
     if (e.pointerId === this.strokeId) {
       if (this.strokeIsPen) this.stats.penActiveMs += e.timeStamp - this.strokeStart;
       this.strokeId = null;
