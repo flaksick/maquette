@@ -2,8 +2,19 @@
 // the engine worker is its only writer (invariant 2); the persist worker owns storage.
 import type { BenchResult, BudgetChange, BudgetState, StressResult } from '../budget';
 
-export type ToolName = 'draw' | 'smooth' | 'grab';
-export const TOOL_ID: Record<ToolName, number> = { draw: 0, smooth: 1, grab: 2 };
+// Tool names are stable: saved brush state and presets are keyed by them. Ids are the engine's
+// (core/src/brushes.rs Tool).
+export type ToolName =
+  | 'draw' | 'smooth' | 'grab' | 'inflate' | 'flatten' | 'clay' | 'clay-strips'
+  | 'crease' | 'pinch' | 'snake-hook' | 'layer' | 'fill' | 'scrape' | 'planar';
+export const TOOL_ID: Record<ToolName, number> = {
+  draw: 0, smooth: 1, grab: 2, inflate: 3, flatten: 4, clay: 5, 'clay-strips': 6,
+  crease: 7, pinch: 8, 'snake-hook': 9, layer: 10, fill: 11, scrape: 12, planar: 13,
+};
+
+/** Falloff presets (STK-4), engine ids in order. */
+export const FALLOFFS = ['smooth', 'smoother', 'sphere', 'root', 'sharp', 'linear', 'pow4', 'invsquare', 'constant'] as const;
+export type FalloffName = (typeof FALLOFFS)[number];
 
 export interface BrushState {
   tool: ToolName;
@@ -13,6 +24,13 @@ export interface BrushState {
   pressureStrength: boolean;
   gamma: number;
   symmetryX: boolean;
+  // Optional so brush state saved before they existed still loads (PRJ-10).
+  symmetryY?: boolean;
+  symmetryZ?: boolean;
+  falloff?: FalloffName;
+  hardness?: number;
+  autosmooth?: number;
+  accumulate?: boolean;
 }
 
 export interface Stats {

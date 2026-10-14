@@ -5,7 +5,7 @@ import { ui } from './state';
 import { bus } from './bus';
 import { offline, updateWaiting, autoUpdate, setAutoUpdate, checkForUpdate } from './sw-client';
 import BalloonWorker from './balloon.worker?worker';
-import type { ToolName } from './shared/protocol';
+import { FALLOFFS, type FalloffName, type ToolName } from './shared/protocol';
 import { BUDGET, CHANNEL } from './config';
 import { Sheet } from './sheet';
 import { ProjectsSheet } from './gallery';
@@ -18,7 +18,25 @@ const TOOLS: { id: ToolName; label: string; feature: string }[] = [
   { id: 'draw', label: 'Draw', feature: 'BRS-1' },
   { id: 'smooth', label: 'Smooth', feature: 'BRS-2' },
   { id: 'grab', label: 'Grab', feature: 'BRS-3' },
+  { id: 'inflate', label: 'Inflate', feature: 'BRS-4' },
+  { id: 'flatten', label: 'Flatten', feature: 'BRS-5' },
+  { id: 'clay', label: 'Clay', feature: 'BRS-6' },
+  { id: 'clay-strips', label: 'Clay Strips', feature: 'BRS-6' },
+  { id: 'crease', label: 'Crease', feature: 'BRS-7' },
+  { id: 'pinch', label: 'Pinch', feature: 'BRS-8' },
+  { id: 'snake-hook', label: 'Snake Hook', feature: 'BRS-9' },
+  { id: 'layer', label: 'Layer', feature: 'BRS-10' },
+  { id: 'fill', label: 'Fill', feature: 'BRS-11' },
+  { id: 'scrape', label: 'Scrape', feature: 'BRS-11' },
+  { id: 'planar', label: 'Planar', feature: 'BRS-11' },
 ];
+const FALLOFF_LABEL: Record<FalloffName, string> = {
+  smooth: 'Smooth', smoother: 'Smoother', sphere: 'Sphere', root: 'Root', sharp: 'Sharp',
+  linear: 'Linear', pow4: 'Pow 4', invsquare: 'Inverse square', constant: 'Constant',
+};
+/** Tools whose engine dab ignores these settings (so the panel hides them: no fake UI). */
+const NO_ACCUMULATE: ToolName[] = ['smooth', 'grab', 'snake-hook', 'layer'];
+const NO_AUTOSMOOTH: ToolName[] = ['smooth', 'grab'];
 
 const fmt = (n: number) => n.toLocaleString('en-US');
 
@@ -50,17 +68,6 @@ function TopBar() {
         </button>
       </div>
       <div class="group">
-        <button
-          data-feature="SYM-1"
-          class={ui.symmetry.value ? 'on' : ''}
-          aria-pressed={ui.symmetry.value}
-          onClick={() => {
-            ui.symmetry.value = !ui.symmetry.value;
-            ui.pushBrush();
-          }}
-        >
-          Mirror X
-        </button>
         <button data-feature="PRM-1" onClick={() => (ui.sheet.value = 'new')}>New</button>
         <ImportButton />
         <button data-feature="EXP-7" onClick={() => {
@@ -81,12 +88,73 @@ function TopBar() {
 function Tools() {
   return (
     <nav class="tools">
-      {TOOLS.map((t) => (
-        <button key={t.id} data-feature={t.feature} class={ui.tool.value === t.id ? 'tool on' : 'tool'} onClick={() => ui.setTool(t.id)}>
-          {t.label}
-        </button>
-      ))}
+      <div class="palette">
+        {TOOLS.map((t) => (
+          <button key={t.id} data-feature={t.feature} data-tool={t.id} class={ui.tool.value === t.id ? 'tool on' : 'tool'} onClick={() => ui.setTool(t.id)}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <BrushPanel />
     </nav>
+  );
+}
+
+/** Falloff, hardness (STK-4), auto-smooth and accumulate (STK-11) of the current tool, and the
+ *  mirror axes (SYM-1). */
+function BrushPanel() {
+  const t = ui.tool.value;
+  const s = ui.tools.value[t];
+  const axes = [
+    ['X', ui.symmetry],
+    ['Y', ui.symmetryY],
+    ['Z', ui.symmetryZ],
+  ] as const;
+  return (
+    <div class="brushopts">
+      <label>
+        Falloff
+        <select data-feature="STK-4" value={s.falloff} onChange={(e) => ui.setToolSetting({ falloff: (e.target as HTMLSelectElement).value as FalloffName })}>
+          {FALLOFFS.map((f) => (
+            <option key={f} value={f}>{FALLOFF_LABEL[f]}</option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Hardness {Math.round(s.hardness * 100)}%
+        <input type="range" data-feature="STK-4" min={0} max={1} step={0.05} value={s.hardness} onInput={(e) => ui.setToolSetting({ hardness: Number((e.target as HTMLInputElement).value) })} />
+      </label>
+      {!NO_AUTOSMOOTH.includes(t) && (
+        <label>
+          Auto-smooth {Math.round(s.autosmooth * 100)}%
+          <input type="range" data-feature="STK-11" min={0} max={1} step={0.05} value={s.autosmooth} onInput={(e) => ui.setToolSetting({ autosmooth: Number((e.target as HTMLInputElement).value) })} />
+        </label>
+      )}
+      {!NO_ACCUMULATE.includes(t) && (
+        <label class="check">
+          <input type="checkbox" data-feature="STK-11" checked={s.accumulate} onChange={(e) => ui.setToolSetting({ accumulate: (e.target as HTMLInputElement).checked })} />
+          Accumulate
+        </label>
+      )}
+      <div class="axes">
+        Mirror
+        {axes.map(([name, sig]) => (
+          <button
+            key={name}
+            data-feature="SYM-1"
+            class={sig.value ? 'on' : ''}
+            aria-pressed={sig.value}
+            aria-label={`Mirror ${name}`}
+            onClick={() => {
+              sig.value = !sig.value;
+              ui.pushBrush();
+            }}
+          >
+            {name}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
