@@ -1,5 +1,5 @@
 {
- "version": "ed97f03136d4",
+ "version": "86667791f6c4",
  "files": [
   {
    "url": "assets/balloon.worker-Dg78DWow.js",
@@ -27,14 +27,14 @@
    "sha256": "1b00132fe0719c602d3774a688adbf31e254a929be49de83d3297c375cd9a4a4"
   },
   {
-   "url": "assets/index-CgeYAYTj.css",
-   "bytes": 6675,
-   "sha256": "f4bbea0db371fea1fa838c027bf22b5991e86a421d516192e54b2ab9a249c4e9"
+   "url": "assets/index-BEZGbBX1.js",
+   "bytes": 75671,
+   "sha256": "e5b5bb9cbb61bd6716596db1a346d5265ba52fb54964e8da03825a2bc253c7fd"
   },
   {
-   "url": "assets/index-D901FRcs.js",
-   "bytes": 75594,
-   "sha256": "8211b15a718bf932969cc90ca0a687a38b90f36dd22b29d00a7bdf8f67ebc980"
+   "url": "assets/index-CiXAZcSH.css",
+   "bytes": 6723,
+   "sha256": "14898762d5dbb946119081f53affb57b95d0f55eaacb8766339e29b05a763e5f"
   },
   {
    "url": "assets/persist.worker-CeobQQrY.js",
@@ -64,7 +64,7 @@
   {
    "url": "index.html",
    "bytes": 834,
-   "sha256": "4d01c359ae75d325814dc7ab97364eebfd42f99f9e43ba35559a037f90d268c9"
+   "sha256": "63771d6b8a14034d025301216197b8ae3c1814b5130bb71a635eed1cb19fab1f"
   },
   {
    "url": "manifest.webmanifest",
