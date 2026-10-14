@@ -9,7 +9,12 @@
 // in 4 MB chunks (journal appends are served between chunks: they go to the new segment), then
 // flips the manifest slot, then deletes the old segment. Recovery replays every segment at or
 // after the manifest's journalGen; records are absolute leaf states, so replay is idempotent.
+//
+// The project library (gallery, project files, backups, preferences: P1b) lives in library.ts
+// and reaches this worker over a second port from the main thread; its messages share the queue.
 import { STORAGE_ROOT, type OpenResult, type PersistReply, type ToPersist } from '../shared/protocol';
+import type { ToLibrary } from '../shared/library';
+import { disk, handleLibrary, isQuotaError, newestLive, storageNumbers, type LibraryCtx } from './library';
 
 interface SyncHandle {
   read(buffer: ArrayBufferView, options?: { at?: number }): number;
@@ -29,6 +34,8 @@ interface Manifest {
   gen: number;
   checkpointSeq: number;
   journalGen: number;
+  /** Set while the project is in Recently Deleted (PRJ-1, library.ts). */
+  deletedAt?: string;
   crc?: number;
 }
 
@@ -177,17 +184,29 @@ async function attach(id: string, dir: FileSystemDirectoryHandle, manifest: Mani
   await writeWhole(await root(), 'index.json', enc.encode(JSON.stringify({ lastProject: id })));
 }
 
+/** Reopens the last project; if it is gone or in Recently Deleted (deleted, then the app died
+ *  before it switched away), the most recently modified live project instead. */
 async function openLast(): Promise<OpenResult> {
   const idx = await readJson<{ lastProject?: string }>(await root(), 'index.json');
-  if (!idx?.lastProject) return { status: 'none' };
+  if (idx?.lastProject) {
+    const r = await openProject(idx.lastProject);
+    if (r.status === 'ok') return r;
+  }
+  const fallback = await newestLive(libCtx);
+  return fallback ? openProject(fallback) : { status: 'none' };
+}
+
+/** Opens a project by id: the same recovery for a launch and a gallery switch. Nothing changes
+ *  (the previous project stays attached) unless the project's files are all readable. */
+async function openProject(id: string): Promise<OpenResult> {
   let dir: FileSystemDirectoryHandle;
   try {
-    dir = await projectDir(idx.lastProject);
+    dir = await projectDir(id);
   } catch {
     return { status: 'none' };
   }
   const manifest = await loadManifest(dir);
-  if (!manifest) return { status: 'none' };
+  if (!manifest || manifest.deletedAt) return { status: 'none' };
   const topo = await readFile(dir, 'topo.bin');
   const positions = await readFile(dir, 'positions.bin');
   if (!topo || !positions) return { status: 'none' };
@@ -225,11 +244,11 @@ async function openLast(): Promise<OpenResult> {
   // Append after the newest segment. The manifest is NOT changed here: segments from a
   // checkpoint that never finished still hold records the positions file may not contain;
   // they stay until the next checkpoint completes.
-  await attach(idx.lastProject, dir, manifest, newest);
+  await attach(id, dir, manifest, newest);
   const stateBytes = await readFile(dir, 'state.json');
   return {
     status: 'ok',
-    projectId: idx.lastProject,
+    projectId: id,
     name: manifest.name,
     topo,
     positions,
@@ -253,10 +272,24 @@ async function create(id: string, name: string, topo: ArrayBuffer, positions: Ar
   } catch {}
 }
 
-function appendJournal(bytes: ArrayBuffer): void {
+// PLT-11: once the disk refuses a record, every later record is refused too until the engine
+// resends the refused one (`resume`), so the journal can never hold record N+1 without N.
+let journalBlocked = false;
+
+function appendJournal(bytes: ArrayBuffer, resume = false): void {
   if (!cur) throw new Error('no open project');
+  if (journalBlocked && !resume) throw new DOMException('An earlier stroke is still waiting for disk space.', 'QuotaExceededError');
   const b = new Uint8Array(bytes);
-  cur.journal.write(b, { at: cur.journalOffset });
+  try {
+    disk.spend(b.length);
+    cur.journal.write(b, { at: cur.journalOffset });
+  } catch (e) {
+    // A refused write may leave a partial record past journalOffset: the next append overwrites
+    // it, and recovery's CRC check stops before it if the app dies first.
+    if (isQuotaError(e)) journalBlocked = true;
+    throw e;
+  }
+  journalBlocked = false;
   cur.journal.flush();
   cur.journalOffset += b.length;
 }
@@ -271,25 +304,30 @@ async function checkpoint(seq: number, ranges: Uint32Array, data: ArrayBuffer): 
   c.journal.truncate(0);
   c.journalOffset = 0;
   c.appendGen = newGen;
-  // 2. Dirty ranges in <= 4 MB chunks, serving journal appends in between.
-  const bytes = new Uint8Array(data);
-  let src = 0;
-  for (let i = 0; i < ranges.length; i += 2) {
-    const fileOffset = ranges[i];
-    const len = ranges[i + 1];
-    for (let done = 0; done < len; done += CHUNK) {
-      const n = Math.min(CHUNK, len - done);
-      c.positions.write(bytes.subarray(src + done, src + done + n), { at: fileOffset + done });
-      await serveJournal();
+  try {
+    // 2. Dirty ranges in <= 4 MB chunks, serving journal appends in between.
+    const bytes = new Uint8Array(data);
+    let src = 0;
+    for (let i = 0; i < ranges.length; i += 2) {
+      const fileOffset = ranges[i];
+      const len = ranges[i + 1];
+      for (let done = 0; done < len; done += CHUNK) {
+        const n = Math.min(CHUNK, len - done);
+        c.positions.write(bytes.subarray(src + done, src + done + n), { at: fileOffset + done });
+        await serveJournal();
+      }
+      src += len;
     }
-    src += len;
+    c.positions.flush();
+    // 3. Flip the manifest. 4. Drop every older segment (all their records are <= seq).
+    const next: Manifest = { ...c.manifest, gen: c.manifest.gen + 1, checkpointSeq: seq, journalGen: newGen };
+    await writeManifest(c.dir, next);
+    c.manifest = next;
+  } finally {
+    // On failure (e.g. a full disk, PLT-11) the manifest still points at the old segments, which
+    // recovery replays; only the handle is released so the next checkpoint can delete the file.
+    oldJournal.close();
   }
-  c.positions.flush();
-  // 3. Flip the manifest. 4. Drop every older segment (all their records are <= seq).
-  const next: Manifest = { ...c.manifest, gen: c.manifest.gen + 1, checkpointSeq: seq, journalGen: newGen };
-  await writeManifest(c.dir, next);
-  c.manifest = next;
-  oldJournal.close();
   const stale: string[] = [];
   for await (const [name] of (c.dir as unknown as { entries(): AsyncIterable<[string, FileSystemHandle]> }).entries()) {
     const m = /^journal-(\d+)\.bin$/.exec(name);
@@ -342,24 +380,37 @@ async function sessionEnd(): Promise<void> {
 // ---------- message pump: journal first ----------
 
 const journalQ: ToPersist[] = [];
-const otherQ: ToPersist[] = [];
+const otherQ: (ToPersist | UiMsg)[] = [];
 let running = false;
 
 function reply(r: PersistReply, transfer: Transferable[] = []): void {
   port?.postMessage(r, transfer);
 }
 
-async function handle(m: ToPersist): Promise<void> {
+/** Writes from the engine name the project they belong to; one aimed at a project that is no
+ *  longer open is refused rather than written into the wrong project. */
+function mustBeOpen(projectId?: string): void {
+  if (projectId && cur && cur.id !== projectId) throw new Error(`refused: write for project ${projectId}, but ${cur.id} is open`);
+}
+
+async function handle(m: ToPersist | UiMsg): Promise<void> {
+  if ('op' in m) return handleLibrary(libCtx, m, (r, t) => uiPort?.postMessage(r, t ?? []));
   try {
     switch (m.type) {
       case 'journal': {
         const t = performance.now();
-        appendJournal(m.bytes);
+        mustBeOpen(m.projectId);
+        appendJournal(m.bytes, m.resume);
         reply({ id: m.id, ok: true, value: { seq: m.seq, ms: performance.now() - t } });
         break;
       }
-      case 'open-last': {
-        const r = await openLast();
+      case 'open-last':
+      case 'open': {
+        // A (re)starting engine or a reopen: release the open project's locks first, so recovery
+        // can cut a torn journal tail. A switch keeps the current project attached until the
+        // new one has been read completely (openProject attaches last).
+        if (m.type === 'open-last' || cur?.id === m.projectId) await closeCurrent();
+        const r = m.type === 'open' ? await openProject(m.projectId) : await openLast();
         const transfer = [r.topo, r.positions, r.journal].filter((x): x is ArrayBuffer => !!x);
         reply({ id: m.id, ok: true, value: r }, transfer);
         break;
@@ -369,10 +420,12 @@ async function handle(m: ToPersist): Promise<void> {
         reply({ id: m.id, ok: true });
         break;
       case 'checkpoint':
+        mustBeOpen(m.projectId);
         await checkpoint(m.seq, m.ranges, m.data);
         reply({ id: m.id, ok: true, value: { seq: m.seq } });
         break;
       case 'state':
+        mustBeOpen(m.projectId);
         if (cur) await writeWhole(cur.dir, 'state.json', enc.encode(m.json));
         reply({ id: m.id, ok: true });
         break;
@@ -388,14 +441,13 @@ async function handle(m: ToPersist): Promise<void> {
         reply({ id: m.id, ok: true });
         break;
       case 'estimate': {
-        const est = await navigator.storage.estimate();
-        const persisted = await navigator.storage.persisted();
-        reply({ id: m.id, ok: true, value: { usage: est.usage, quota: est.quota, persisted } });
+        const s = await storageNumbers(); // the simulated disk in PLT-11 tests, else the real one
+        reply({ id: m.id, ok: true, value: { usage: s.usage, quota: s.quota, persisted: s.persisted } });
         break;
       }
     }
   } catch (e) {
-    reply({ id: m.id, ok: false, error: String(e) });
+    reply({ id: m.id, ok: false, error: String(e), code: isQuotaError(e) ? 'quota' : undefined });
   }
 }
 
@@ -418,7 +470,34 @@ async function pump(): Promise<void> {
   }
 }
 
-self.onmessage = (e: MessageEvent<{ type: 'connect'; port: MessagePort; channel: string }>) => {
+// ---------- the library's port (main thread, P1b) ----------
+type UiMsg = ToLibrary;
+let uiPort: MessagePort | null = null;
+const libCtx: LibraryCtx = {
+  root,
+  projectDir,
+  openHandle,
+  writeWhole,
+  loadManifest,
+  writeManifest,
+  validPrefix,
+  serveJournal,
+  current: () => cur,
+  channel: () => channel,
+};
+
+self.onmessage = (e: MessageEvent<{ type: 'connect' | 'connect-ui'; port: MessagePort; channel: string }>) => {
+  if (e.data.type === 'connect-ui') {
+    // The main thread's port: library messages queue behind engine messages, never ahead of
+    // journal appends.
+    channel = e.data.channel;
+    uiPort = e.data.port;
+    uiPort.onmessage = (ev: MessageEvent<ToLibrary>) => {
+      otherQ.push(ev.data);
+      void pump();
+    };
+    return;
+  }
   if (e.data.type !== 'connect') return;
   channel = e.data.channel;
   port = e.data.port;

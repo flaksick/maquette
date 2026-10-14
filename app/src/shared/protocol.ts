@@ -59,7 +59,10 @@ export type ToEngine =
   | { type: 'visible' }
   | { type: 'hidden' }
   | { type: 'debug-trap' }
-  | { type: 'query' };
+  | { type: 'query' }
+  // P1b projects (PRJ-1): load another project by id; PLT-11: retry records the disk refused.
+  | { type: 'open-project'; id: string }
+  | { type: 'disk-retry' };
 
 /** Engine -> main. */
 export type FromEngine =
@@ -72,7 +75,12 @@ export type FromEngine =
   | { type: 'refused'; text: string }
   | { type: 'state'; brush?: BrushState }
   | { type: 'fatal'; error: string }
-  | { type: 'query-result'; hash: string; stats: Stats; storageOk: boolean };
+  | { type: 'query-result'; hash: string; stats: Stats; storageOk: boolean }
+  // P1b: the open project (after launch, new, open; `error` = a switch failed and this one stayed
+  // open). `brushRestored` = the brush came from the project's saved state (PRJ-10).
+  | { type: 'project'; id: string; name: string; brush: BrushState; brushRestored: boolean; error?: string }
+  // PLT-11: the disk refused journal records; edits are blocked until they are saved.
+  | { type: 'disk'; full: boolean; unsaved: number };
 
 export interface RecoveryInfo {
   project: string;
@@ -86,9 +94,10 @@ export interface RecoveryInfo {
 export type ToPersist =
   | { id: number; type: 'open-last' }
   | { id: number; type: 'create'; projectId: string; name: string; topo: ArrayBuffer; positions: ArrayBuffer }
-  | { id: number; type: 'journal'; seq: number; bytes: ArrayBuffer }
-  | { id: number; type: 'checkpoint'; seq: number; ranges: Uint32Array; data: ArrayBuffer }
-  | { id: number; type: 'state'; json: string }
+  | { id: number; type: 'journal'; seq: number; bytes: ArrayBuffer; projectId?: string; resume?: boolean }
+  | { id: number; type: 'checkpoint'; seq: number; ranges: Uint32Array; data: ArrayBuffer; projectId?: string }
+  | { id: number; type: 'state'; json: string; projectId?: string }
+  | { id: number; type: 'open'; projectId: string }
   | { id: number; type: 'session-start' }
   | { id: number; type: 'session-beat'; highWaterMB: number; seq: number }
   | { id: number; type: 'session-end' }
@@ -110,6 +119,8 @@ export interface PersistReply {
   ok: boolean;
   error?: string;
   value?: unknown;
+  /** 'quota': the disk is full (PLT-11); the operation can be retried once space is freed. */
+  code?: 'quota';
 }
 
 /** Channel-namespaced storage root (decision row "Persistence"). */
