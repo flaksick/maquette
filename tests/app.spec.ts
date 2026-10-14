@@ -38,7 +38,26 @@ async function stroke(page: Page, dx = 0, finish = true): Promise<void> {
   for (let i = 0; i <= 12; i++) await page.mouse.move(cx - 60 + i * 10, cy - 20 + i * 3);
   if (finish) await page.mouse.up();
 }
-function killWebContent(): number {
+/** Playwright runs on this machine other than this one (their runner, npm and sh wrappers),
+ *  found by walking this worker's ancestors out of the process list. */
+function otherRuns(): number {
+  const procs = execSync('ps -axo pid=,ppid=,command=', { encoding: 'utf8' })
+    .split('\n')
+    .map((l) => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(l))
+    .filter((m): m is RegExpExecArray => !!m)
+    .map((m) => ({ pid: Number(m[1]), ppid: Number(m[2]), cmd: m[3] }));
+  const parent = new Map(procs.map((p) => [p.pid, p.ppid]));
+  const mine = new Set<number>();
+  for (let p: number | undefined = process.pid; p && !mine.has(p); p = parent.get(p)) mine.add(p);
+  return procs.filter((p) => !mine.has(p.pid) && /playwright(\.js)?\s+test\b|cli\.js\s+test\b/.test(p.cmd)).length;
+}
+const killWaits: number[] = [];
+async function killWebContent(): Promise<number> {
+  // The kill takes every Playwright WebKit content process on the machine, so wait until no other
+  // run is active (parallel agents' e2e) rather than crash theirs.
+  const t0 = Date.now();
+  while (otherRuns() > 0 && Date.now() - t0 < 20 * 60_000) await new Promise((r) => setTimeout(r, 5000));
+  killWaits.push(Math.round((Date.now() - t0) / 1000));
   let pids: string[] = [];
   try {
     pids = execSync("pgrep -f 'ms-playwright/webkit.*WebContent'", { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
@@ -101,7 +120,7 @@ test('UND-1 NAV-2 PLT-10 PLT-2 EXP-7 PLT-7: sculpt, undo/redo, idle, offline rel
     await waitSaved(page, 4);
     const h2 = (await q(page)).hash;
     if (KILLS) {
-    const killed1 = killWebContent();
+    const killed1 = await killWebContent();
     page = await reopen(ctx, page);
     page.on('pageerror', (e) => errors.push(String(e)));
     const after1 = await q(page);
@@ -111,7 +130,7 @@ test('UND-1 NAV-2 PLT-10 PLT-2 EXP-7 PLT-7: sculpt, undo/redo, idle, offline rel
     // Kill mid-stroke: the in-flight stroke is the only thing allowed to be lost.
     await stroke(page, -120, false);
     await page.waitForTimeout(150);
-    const killed2 = killWebContent();
+    const killed2 = await killWebContent();
     page = await reopen(ctx, page);
     page.on('pageerror', (e) => errors.push(String(e)));
     const after2 = await q(page);
@@ -163,6 +182,7 @@ test('UND-1 NAV-2 PLT-10 PLT-2 EXP-7 PLT-7: sculpt, undo/redo, idle, offline rel
     expect(results.trapRecovered).toBe(true);
   } finally {
     results.pageErrors = errors;
+    results.killWaitSeconds = killWaits;
     writeFileSync('test-results/app-webkit.json', JSON.stringify(results, null, 1));
     console.log(JSON.stringify(results, null, 1));
     await ctx.close();
