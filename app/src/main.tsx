@@ -9,10 +9,18 @@ import { SHEETS, ui } from './state';
 import { bus } from './bus';
 import { InputController } from './input';
 import { registerServiceWorker } from './sw-client';
+import { attachPersist, benchRun, budget, onBudget, runBench, startStressTest, stressRun } from './budget-client';
 import type { FromEngine, ToEngine } from './shared/protocol';
 
 
 const persist = new PersistWorker();
+// PLT-8: the main thread's own persist port (budget, speed test, stress test); the stress worker
+// gets one more through `connect`.
+{
+  const ch = new MessageChannel();
+  persist.postMessage({ type: 'connect', port: ch.port1, channel: CHANNEL }, [ch.port1]);
+  attachPersist(ch.port2, (p) => persist.postMessage({ type: 'connect', port: p, channel: CHANNEL }, [p]));
+}
 let engine: Worker | null = null;
 let canvas: HTMLCanvasElement | null = null;
 let restarts = 0;
@@ -106,6 +114,9 @@ function onEngine(m: FromEngine): void {
     case 'query-result':
       queryWaiters.shift()?.(m);
       break;
+    case 'budget':
+      onBudget(m);
+      break;
   }
 }
 
@@ -144,4 +155,4 @@ new ResizeObserver(queueResize).observe(document.getElementById('viewport')!);
 window.addEventListener('resize', queueResize);
 window.addEventListener('orientationchange', queueResize);
 document.addEventListener('visibilitychange', () => send({ type: document.visibilityState === 'visible' ? 'visible' : 'hidden' }));
-(window as unknown as { __maquette: unknown }).__maquette = { ui, query, send, input: input.stats, sheets: SHEETS };
+(window as unknown as { __maquette: unknown }).__maquette = { ui, query, send, input: input.stats, sheets: SHEETS, budget: { state: budget, bench: benchRun, stress: stressRun, runBench, startStressTest } };

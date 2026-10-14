@@ -16,7 +16,7 @@ const DEFAULTS: Record<ToolName, ToolSetting> = {
 };
 /** Every sheet the app can show. scripts/check-ui.mjs opens each one (invariant 7: no fake UI),
  *  so a sheet missing from this list is a sheet the registry check never sees. */
-export const SHEETS = ['new', 'export', 'settings', 'diag'] as const;
+export const SHEETS = ['new', 'export', 'settings', 'diag', 'stress'] as const;
 export type SheetName = (typeof SHEETS)[number];
 
 const PRESSURE: Record<ToolName, { radius: boolean; strength: boolean }> = {

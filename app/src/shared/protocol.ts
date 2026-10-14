@@ -1,5 +1,6 @@
 // Messages between the three threads. The main thread never touches the mesh (invariant 1);
 // the engine worker is its only writer (invariant 2); the persist worker owns storage.
+import type { BenchResult, BudgetChange, BudgetState, StressResult } from '../budget';
 
 export type ToolName = 'draw' | 'smooth' | 'grab';
 export const TOOL_ID: Record<ToolName, number> = { draw: 0, smooth: 1, grab: 2 };
@@ -59,7 +60,9 @@ export type ToEngine =
   | { type: 'visible' }
   | { type: 'hidden' }
   | { type: 'debug-trap' }
-  | { type: 'query' };
+  | { type: 'query' }
+  // ---- PLT-8 device budgets ----
+  | { type: 'budget'; budget: BudgetState };
 
 /** Engine -> main. */
 export type FromEngine =
@@ -72,7 +75,9 @@ export type FromEngine =
   | { type: 'refused'; text: string }
   | { type: 'state'; brush?: BrushState }
   | { type: 'fatal'; error: string }
-  | { type: 'query-result'; hash: string; stats: Stats; storageOk: boolean };
+  | { type: 'query-result'; hash: string; stats: Stats; storageOk: boolean }
+  // ---- PLT-8 device budgets: the budget in force after session-start learning ----
+  | { type: 'budget'; budget: BudgetState; change: BudgetChange | null; stress: StressResult | null };
 
 export interface RecoveryInfo {
   project: string;
@@ -92,7 +97,27 @@ export type ToPersist =
   | { id: number; type: 'session-start' }
   | { id: number; type: 'session-beat'; highWaterMB: number; seq: number }
   | { id: number; type: 'session-end' }
-  | { id: number; type: 'estimate' };
+  | { id: number; type: 'estimate' }
+  // ---- PLT-8 device budgets (main thread and the stress worker have their own ports) ----
+  | { id: number; type: 'budget-get' }
+  | { id: number; type: 'budget-bench'; bench: BenchResult }
+  | { id: number; type: 'session-mark'; deliberate: 'kill-test' | 'stress-test'; appMB: number }
+  | { id: number; type: 'stress-mark'; phase: 'growing' | 'ok'; attemptMB: number; lastOkMB: number }
+  | { id: number; type: 'stress-end'; outcome: 'refused' | 'capped'; lastOkMB: number; failedAtMB: number | null };
+
+/** session-start reply (PLT-8 learning happens inside it). */
+export interface SessionStartResult {
+  uncleanExit: boolean;
+  budget: BudgetState;
+  change: BudgetChange | null;
+  stress: StressResult | null;
+}
+/** stress-end / budget-bench / budget-get reply. */
+export interface BudgetReply {
+  budget: BudgetState;
+  change: BudgetChange | null;
+  stress: StressResult | null;
+}
 
 export interface OpenResult {
   status: 'none' | 'ok';

@@ -267,3 +267,42 @@ export function memoryTris(budgetMB: number): number {
 
 export const fmtTris = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n));
 export const fmtMB = (n: number) => `${Math.round(n).toLocaleString('en-US')} MB`;
+
+// ---------- the budget in force (per thread) ----------
+// The engine worker sets it from session-start (learning happens there); the main thread sets it
+// from the engine's 'budget' message. Helper workers get the number passed in with their job.
+let inForce: BudgetState = initialBudget();
+
+export function setBudget(s: BudgetState): void {
+  inForce = s;
+}
+export function currentBudget(): BudgetState {
+  return inForce;
+}
+/** The learned memory budget for the whole app, in MB (PLT-8). */
+export function budgetMB(): number {
+  return inForce.budgetMB;
+}
+
+export interface Preflight {
+  ok: boolean;
+  steadyMB: number;
+  transientMB: number;
+  peakMB: number;
+  budgetMB: number;
+  /** The refusal sentence, with the numbers and the budget's source (empty when ok). */
+  text: string;
+}
+/** Invariant 6 pre-flight: an operation runs only if steady + transient fits the learned budget;
+ *  otherwise it is refused before it starts, with the numbers shown. `steadyMB` is what the app
+ *  holds now (WASM memory + GPU; WASM never shrinks), `transientMB` what the operation adds at its
+ *  peak (an operation that frees the current mesh first passes the new mesh minus what it frees). */
+export function fits(steadyMB: number, transientMB: number, what = 'This operation'): Preflight {
+  const b = inForce.budgetMB;
+  const peak = Math.max(0, steadyMB) + Math.max(0, transientMB);
+  const ok = peak <= b;
+  const text = ok
+    ? ''
+    : `${what} needs about ${fmtMB(transientMB)} on top of ${fmtMB(steadyMB)} in use; this iPad's budget is ${fmtMB(b)} (${budgetSource(inForce)}).`;
+  return { ok, steadyMB, transientMB, peakMB: peak, budgetMB: b, text };
+}
