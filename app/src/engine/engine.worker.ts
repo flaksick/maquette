@@ -15,6 +15,8 @@ import {
   type Stats,
   type ToEngine,
   type ToPersist,
+  type RemeshCmd,
+  type RemeshEstimate,
   type ImportReport,
   type Units,
   UNITS,
@@ -144,7 +146,12 @@ function stats(): Stats {
   const p = core.x.mq_alloc(48);
   core.x.eng_stats(p);
   const s = core.u32s(p, 12).slice();
+  core.x.eng_heavy_depths(p); // TOP-1: remesh steps count as undo/redo steps
+  const heavy = core.u32s(p, 3).slice();
   core.x.mq_free(p, 48);
+  s[4] += heavy[0];
+  s[5] += heavy[1];
+  s[6] += heavy[2];
   return {
     verts: s[0],
     tris: s[1],
@@ -238,7 +245,7 @@ function scheduleCheckpoint(): void {
 /** Incremental checkpoint of changed position ranges. Never mid-stroke: a snapshot must equal
  *  the state after a journaled record. */
 async function checkpoint(): Promise<void> {
-  if (!storageOk || ckptInFlight || strokeActive || loading) return;
+  if (!storageOk || ckptInFlight || strokeActive || loading || replacing) return;
   core.x.eng_frame_update(); // flush dirty flags from the last stroke into the checkpoint set
   const n = core.x.eng_checkpoint_collect();
   if (n === 0) return;
@@ -320,6 +327,7 @@ async function createSphere(n: number): Promise<boolean> {
  *  through persist 'create', view framed. Brush and camera live in the engine, so the brush is
  *  re-sent after every install (the camera is committed before each stroke). */
 async function createProjectFromEngine(name: string, u: Units): Promise<void> {
+  core.x.eng_heavy_reset(); // TOP-1: older meshes (remesh undo) belong to the previous project
   core.x.eng_set_history(Math.round(budgetMB() * 0.25), 200);
   meshVerts = (core.x.eng_positions_bytes() / 12) | 0;
   setBrush(brush);
@@ -434,6 +442,7 @@ function loadProject(r: OpenResult, unclean: boolean): RecoveryInfo {
   core.x.mq_free(tp, tl);
   core.x.mq_free(pp, pl);
   if (ok !== 1) throw new Error(`project files damaged (code ${ok})`);
+  core.x.eng_heavy_reset(); // TOP-1: also cancels a running remesh
   meshVerts = (r.positions!.byteLength / 12) | 0;
   core.x.eng_set_history(Math.round(budgetMB() * 0.25), 200);
   // Replay every intact journal record in order; stop at the first damaged one.
@@ -729,7 +738,7 @@ scope.onmessage = async (e: MessageEvent<ToEngine>) => {
       requestFrame();
       break;
     case 'stroke-begin':
-      if (editBlocked()) break;
+      if (remeshRunning || editBlocked()) break; // the mesh is frozen while a remesh runs
       commitCamera();
       strokeActive = true;
       core.x.eng_stroke_begin(m.x * dpr, m.y * dpr, m.p);
@@ -752,13 +761,20 @@ scope.onmessage = async (e: MessageEvent<ToEngine>) => {
       if (!strokeActive) break;
       const len = core.x.eng_stroke_end();
       strokeActive = false;
+      if (len > 0) core.x.eng_heavy_edit();
       journal(len);
       requestFrame();
       break;
     }
     case 'undo':
     case 'redo': {
-      if (strokeActive || editBlocked()) break;
+      if (strokeActive || remeshRunning || editBlocked()) break;
+      // Across a remesh, undo/redo swaps whole meshes (core/src/remesh/abi.rs); else a record.
+      const swapped = m.type === 'undo' ? core.x.eng_heavy_undo() : core.x.eng_heavy_redo();
+      if (swapped > 0) {
+        topologyInstalled(swapped);
+        break;
+      }
       journal(m.type === 'undo' ? core.x.eng_undo() : core.x.eng_redo());
       requestFrame();
       break;
@@ -792,6 +808,7 @@ scope.onmessage = async (e: MessageEvent<ToEngine>) => {
       requestFrame();
       break;
     case 'new-sphere':
+      if (remeshRunning) break;
       await newSphere(m.n);
       break;
     case 'open-project':
@@ -865,5 +882,159 @@ scope.onmessage = async (e: MessageEvent<ToEngine>) => {
     case 'query':
       scope.postMessage({ type: 'query-result', hash: core.x.eng_hash().toString(16), stats: stats(), storageOk });
       break;
+    case 'remesh':
+      remeshCmd(m.cmd);
+      break;
   }
 };
+
+// ---------- TOP-1 remesh: sliced job, install, save ----------
+// The job runs in ~6 ms slices between messages (orbit/zoom keep rendering: the view stays
+// live); strokes, undo and new spheres are refused while it runs. Finishing installs the new mesh,
+// re-uploads the GPU mirror, re-sends brush and camera, and saves it with 'replace-mesh'.
+const REMESH_SLICE_MS = 6;
+const STAGE_NAMES = ['holes', 'area', 'bvh', 'bvh', 'bvh', 'voxelize', 'flood', 'repair', 'repair', 'surface', 'surface', 'smooth', 'smooth', 'build', 'build', 'done'];
+let remeshRunning = false;
+let replacing = false;
+let remeshUnits = 30_000; // adapted per slice from measured time
+let remeshT0 = 0;
+let remeshSlices = 0;
+let remeshMaxSlice = 0;
+let remeshLastPost = 0;
+
+function remeshPost(ev: Extract<FromEngine, { type: 'remesh' }>['ev']): void {
+  post({ type: 'remesh', ev });
+}
+
+function remeshEstimate(target: number, keepSharp: boolean): RemeshEstimate {
+  core.x.eng_remesh_estimate(target, keepSharp ? 1 : 0);
+  const n = new Float64Array(core.mem(), core.x.eng_remesh_nums_ptr(), 12).slice();
+  const mb = (b: number) => b / 2 ** 20;
+  const undoable = n[10] === 1;
+  // Invariant 6: what the app holds now + the job's transient, the new mesh and the undo snapshot.
+  const pre = fits(steadyMB(), mb(n[4] + n[3] + (undoable ? n[5] : 0)), 'This remesh');
+  return {
+    target,
+    quads: n[1],
+    voxel: n[0],
+    steadyMB: mb(n[3]),
+    transientMB: pre.transientMB,
+    peakMB: pre.peakMB,
+    budgetMB: pre.budgetMB,
+    undoMB: mb(n[5]),
+    undoable,
+    fits: n[7] === 1 && pre.ok,
+  };
+}
+
+function remeshCmd(c: RemeshCmd): void {
+  if (c.op === 'estimate') {
+    remeshPost({ kind: 'estimate', est: remeshEstimate(c.target, c.keepSharp) });
+  } else if (c.op === 'start') {
+    if (remeshRunning || strokeActive) return;
+    const est = remeshEstimate(c.target, c.keepSharp);
+    if (!est.fits) {
+      const text = `Remesh to ${Math.round(est.quads).toLocaleString('en-US')} polys needs about ${fmtMB(est.transientMB)} on top of ${fmtMB(est.peakMB - est.transientMB)} in use; this iPad's budget is ${fmtMB(est.budgetMB)} (${budgetSource(currentBudget())}).`;
+      remeshPost({ kind: 'refused', text });
+      return;
+    }
+    if (core.x.eng_remesh_begin(c.target, c.keepSharp ? 1 : 0, LEAF) !== 1) {
+      remeshPost({ kind: 'refused', text: 'Nothing to remesh.' });
+      return;
+    }
+    remeshRunning = true;
+    remeshT0 = performance.now();
+    remeshSlices = 0;
+    remeshMaxSlice = 0;
+    setTimeout(remeshPump, 0);
+  } else if (c.op === 'cancel') {
+    if (!remeshRunning) return;
+    core.x.eng_remesh_cancel();
+    remeshRunning = false;
+    remeshPost({ kind: 'cancelled' });
+  } else if (c.op === 'validate') {
+    const p = core.x.mq_alloc(28);
+    core.x.eng_validate(p);
+    const v = new Int32Array(core.mem(), p, 7).slice();
+    core.x.mq_free(p, 28);
+    remeshPost({ kind: 'validate', boundaryEdges: v[0], nonManifoldEdges: v[1], inconsistentEdges: v[2], nonManifoldVerts: v[3], components: v[5], euler: v[6] });
+  }
+}
+
+function remeshPump(): void {
+  if (!remeshRunning) return;
+  const t0 = performance.now();
+  const r = core.x.eng_remesh_step(Math.round(remeshUnits));
+  const dt = performance.now() - t0;
+  remeshSlices++;
+  remeshMaxSlice = Math.max(remeshMaxSlice, dt);
+  // Size the next slice from this one (work units are ~10 ns natively; the device decides).
+  remeshUnits = Math.min(5e6, Math.max(2e4, remeshUnits * Math.min(2, Math.max(0.5, REMESH_SLICE_MS / Math.max(dt, 0.25)))));
+  if (r === 0) {
+    if (t0 - remeshLastPost > 100) {
+      remeshLastPost = t0;
+      remeshPost({ kind: 'progress', progress: core.x.eng_remesh_progress(), stage: STAGE_NAMES[core.x.eng_remesh_stage()] ?? '' });
+    }
+    setTimeout(remeshPump, 0);
+    return;
+  }
+  remeshRunning = false;
+  if (r === -1) {
+    remeshPost({ kind: 'cancelled' }); // the mesh was replaced (project switch, import, new)
+    return;
+  }
+  if (r < 0) {
+    core.x.eng_remesh_cancel();
+    remeshPost({ kind: 'refused', text: 'The remesh grid would be too large for this shape.' });
+    return;
+  }
+  const topoLen = core.x.eng_remesh_finish();
+  if (!topoLen) {
+    remeshPost({ kind: 'refused', text: 'Remesh failed to finish.' });
+    return;
+  }
+  const n = new Float64Array(core.mem(), core.x.eng_remesh_nums_ptr(), 32).slice();
+  topologyInstalled(topoLen);
+  remeshPost({
+    kind: 'done',
+    quads: n[16],
+    verts: n[17],
+    tris: n[18],
+    undoable: n[19] === 1,
+    peakMB: Math.round(n[24] / 2 ** 20),
+    ms: Math.round(performance.now() - remeshT0),
+    slices: remeshSlices,
+    maxSliceMs: Math.round(remeshMaxSlice * 10) / 10,
+  });
+}
+
+/** A new mesh is installed (remesh finish, or undo/redo across one): GPU, brush, camera, save. */
+function topologyInstalled(topoLen: number): void {
+  const topo = new Uint8Array(core.mem(), core.x.eng_heavy_topo_ptr(), topoLen).slice().buffer;
+  core.x.eng_heavy_topo_release();
+  const positions = new Uint8Array(core.mem(), core.x.eng_positions_ptr(), core.x.eng_positions_bytes()).slice().buffer;
+  renderer.uploadAll(core);
+  setBrush(brush);
+  commitCamera();
+  requestFrame();
+  postStats(true);
+  void saveReplace(topo, positions);
+}
+
+/** Saves a whole new mesh. Waits out a running checkpoint and blocks new ones until done; the
+ *  persist worker queues it with the journal, so later strokes land after it (new topology). */
+async function saveReplace(topo: ArrayBuffer, positions: ArrayBuffer): Promise<void> {
+  const seq = core.x.eng_seq();
+  lastChange = performance.now();
+  if (!storageOk) return;
+  replacing = true;
+  while (ckptInFlight) await new Promise((r) => setTimeout(r, 20));
+  const t0 = performance.now();
+  const r = await call({ type: 'replace-mesh', topo, positions, seq, projectId }, [topo, positions]);
+  replacing = false;
+  if (!r.ok) return storageFailed(r.error);
+  lastAcked = Math.max(lastAcked, seq);
+  journalBytes = 0;
+  post({ type: 'saved', seq, latencyMs: Math.round(performance.now() - t0) });
+  postStats(true);
+}

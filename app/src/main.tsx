@@ -9,6 +9,7 @@ import { SHEETS, ui } from './state';
 import { bus } from './bus';
 import { InputController } from './input';
 import { registerServiceWorker } from './sw-client';
+import { onRemeshEvent } from './remesh';
 import { call, connectLibrary, onEngineMessage, openProject, refreshProjects, watchStorage } from './projects';
 import { holdPresets, loadPrefs, onProjectOpened, prefs, savePrefsNow, setPref } from './prefs';
 import { io, ioMessage } from './io-ui';
@@ -127,6 +128,9 @@ function onEngine(m: FromEngine): void {
       break;
     case 'query-result':
       queryWaiters.shift()?.(m);
+      break;
+    case 'remesh':
+      onRemeshEvent(m.ev);
       break;
     case 'budget':
       onBudget(m);

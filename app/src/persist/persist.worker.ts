@@ -16,6 +16,7 @@ import { STORAGE_ROOT, type BudgetReply, type OpenResult, type PersistReply, typ
 import type { ToLibrary } from '../shared/library';
 import { disk, handleLibrary, isQuotaError, newestLive, storageNumbers, type LibraryCtx } from './library';
 import { applyStress, learn, normalizeBudget, stressFromMarker, type BudgetChange, type BudgetState, type SessionRecord, type StressMarker, type StressResult } from '../budget';
+import { positionsFileOf, replaceMesh, topoFileOf } from './replace';
 
 interface SyncHandle {
   read(buffer: ArrayBufferView, options?: { at?: number }): number;
@@ -35,6 +36,9 @@ interface Manifest {
   gen: number;
   checkpointSeq: number;
   journalGen: number;
+  /** Data file names (TOP-1 replace-mesh); absent = topo.bin / positions.bin. */
+  topoFile?: string;
+  positionsFile?: string;
   /** Set while the project is in Recently Deleted (PRJ-1, library.ts). */
   deletedAt?: string;
   crc?: number;
@@ -179,7 +183,7 @@ async function closeCurrent(): Promise<void> {
 async function attach(id: string, dir: FileSystemDirectoryHandle, manifest: Manifest, appendGen: number): Promise<void> {
   await closeCurrent();
   const journal = await openHandle(dir, `journal-${appendGen}.bin`);
-  const positions = await openHandle(dir, 'positions.bin');
+  const positions = await openHandle(dir, positionsFileOf(manifest));
   cur = { id, dir, manifest, appendGen, journal, journalOffset: journal.getSize(), positions };
   await writeWhole(await root(), 'index.json', enc.encode(JSON.stringify({ lastProject: id })));
 }
@@ -207,8 +211,8 @@ async function openProject(id: string): Promise<OpenResult> {
   }
   const manifest = await loadManifest(dir);
   if (!manifest || manifest.deletedAt) return { status: 'none' };
-  const topo = await readFile(dir, 'topo.bin');
-  const positions = await readFile(dir, 'positions.bin');
+  const topo = await readFile(dir, topoFileOf(manifest));
+  const positions = await readFile(dir, positionsFileOf(manifest));
   if (!topo || !positions) return { status: 'none' };
   // Every journal segment at or after the manifest's generation, in order.
   const segs: number[] = [];
@@ -505,6 +509,12 @@ async function handle({ m, port }: Item): Promise<void> {
         await sessionEnd();
         reply({ id: m.id, ok: true });
         break;
+      case 'replace-mesh':
+        mustBeOpen(m.projectId);
+        if (!cur) throw new Error('no open project');
+        await replaceMesh(cur, { writeWhole, openHandle, writeManifest }, m.topo, m.positions, m.seq);
+        reply({ id: m.id, ok: true, value: { seq: m.seq } });
+        break;
       case 'estimate': {
         const s = await storageNumbers(); // the simulated disk in PLT-11 tests, else the real one
         reply({ id: m.id, ok: true, value: { usage: s.usage, quota: s.quota, persisted: s.persisted } });
@@ -589,7 +599,8 @@ self.onmessage = (e: MessageEvent<{ type: 'connect' | 'connect-ui'; port: Messag
   channel = e.data.channel;
   const port = e.data.port;
   port.onmessage = (ev: MessageEvent<ToPersist>) => {
-    (ev.data.type === 'journal' ? journalQ : otherQ).push({ m: ev.data, port });
+    // replace-mesh rides the journal queue: records after it belong to the new topology.
+    (ev.data.type === 'journal' || ev.data.type === 'replace-mesh' ? journalQ : otherQ).push({ m: ev.data, port });
     void pump();
   };
 };

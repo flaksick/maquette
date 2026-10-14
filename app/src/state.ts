@@ -35,7 +35,7 @@ const DEFAULTS: Record<ToolName, ToolSetting> = {
 };
 /** Every sheet the app can show. scripts/check-ui.mjs opens each one (invariant 7: no fake UI),
  *  so a sheet missing from this list is a sheet the registry check never sees. */
-export const SHEETS = ['new', 'export', 'settings', 'diag', 'projects', 'import', 'stress'] as const;
+export const SHEETS = ['new', 'export', 'settings', 'diag', 'projects', 'import', 'stress', 'remesh'] as const;
 export type SheetName = (typeof SHEETS)[number];
 
 /** Pressure drives strength, except for the drags (Grab, Snake Hook), which follow the pencil. */

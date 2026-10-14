@@ -87,7 +87,36 @@ export type ToEngine =
   | { type: 'open-project'; id: string }
   | { type: 'disk-retry' }
   // ---- PLT-8 device budgets ----
-  | { type: 'budget'; budget: BudgetState };
+  | { type: 'budget'; budget: BudgetState }
+  | { type: 'remesh'; cmd: RemeshCmd };
+
+/** TOP-1 voxel remesh: one envelope each way (engine.worker.ts "TOP-1 remesh" block). */
+export type RemeshCmd =
+  | { op: 'estimate'; target: number; keepSharp: boolean }
+  | { op: 'start'; target: number; keepSharp: boolean }
+  | { op: 'cancel' }
+  | { op: 'validate' };
+
+export interface RemeshEstimate {
+  target: number;
+  quads: number;
+  voxel: number;
+  steadyMB: number;
+  transientMB: number;
+  peakMB: number;
+  budgetMB: number;
+  undoMB: number;
+  undoable: boolean;
+  fits: boolean;
+}
+
+export type RemeshEvent =
+  | { kind: 'estimate'; est: RemeshEstimate }
+  | { kind: 'progress'; progress: number; stage: string }
+  | { kind: 'done'; quads: number; verts: number; tris: number; ms: number; slices: number; maxSliceMs: number; undoable: boolean; peakMB: number }
+  | { kind: 'cancelled' }
+  | { kind: 'refused'; text: string }
+  | { kind: 'validate'; boundaryEdges: number; nonManifoldEdges: number; inconsistentEdges: number; nonManifoldVerts: number; components: number; euler: number };
 
 /** Engine -> main. */
 export type FromEngine =
@@ -111,7 +140,8 @@ export type FromEngine =
   // PLT-11: the disk refused journal records; edits are blocked until they are saved.
   | { type: 'disk'; full: boolean; unsaved: number }
   // ---- PLT-8 device budgets: the budget in force after session-start learning ----
-  | { type: 'budget'; budget: BudgetState; change: BudgetChange | null; stress: StressResult | null };
+  | { type: 'budget'; budget: BudgetState; change: BudgetChange | null; stress: StressResult | null }
+  | { type: 'remesh'; ev: RemeshEvent };
 
 export interface RecoveryInfo {
   project: string;
@@ -133,6 +163,7 @@ export type ToPersist =
   | { id: number; type: 'session-beat'; highWaterMB: number; seq: number }
   | { id: number; type: 'session-end' }
   | { id: number; type: 'estimate' }
+  | { id: number; type: 'replace-mesh'; topo: ArrayBuffer; positions: ArrayBuffer; seq: number; projectId?: string }
   // ---- PLT-8 device budgets (main thread and the stress worker have their own ports) ----
   | { id: number; type: 'budget-get' }
   | { id: number; type: 'budget-bench'; bench: BenchResult }

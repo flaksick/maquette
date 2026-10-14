@@ -13,6 +13,7 @@ import { DiskBanner, GestureCard, StorageSettings } from './safety';
 import { ExportFormat, ImportButton, ImportSheet, requestExport } from './io-ui'; // [io]
 import { budget, benchRun, stressRun, runBench, startStressTest, markKillTest, deviceFeatures } from './budget-client';
 import { budgetSource, ceilingSource, fmtMB, fmtTris, shortSource, APP_BYTES_PER_TRI } from './budget';
+import { RemeshButton, RemeshProgress, RemeshSheet } from './remesh'; // TOP-1
 
 const TOOLS: { id: ToolName; label: string; feature: string }[] = [
   { id: 'draw', label: 'Draw', feature: 'BRS-1' },
@@ -70,6 +71,7 @@ function TopBar() {
       <div class="group">
         <button data-feature="PRM-1" onClick={() => (ui.sheet.value = 'new')}>New</button>
         <ImportButton />
+        <RemeshButton />
         <button data-feature="EXP-7" onClick={() => {
           ui.exportFile.value = null;
           ui.sheet.value = 'export';
@@ -540,6 +542,7 @@ export function App() {
         <ViewButtons />
         <Notice />
         <GestureCard />
+        <RemeshProgress />
         {!ui.ready.value && <div class="loading">Loading your sculpt…</div>}
       </main>
       {sheet === 'new' && <NewSheet />}
@@ -549,6 +552,7 @@ export function App() {
       {sheet === 'projects' && <ProjectsSheet />}
       {sheet === 'import' && <ImportSheet />}
       {sheet === 'stress' && <StressSheet />}
+      {sheet === 'remesh' && <RemeshSheet />}
     </div>
   );
 }
