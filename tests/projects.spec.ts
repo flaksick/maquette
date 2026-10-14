@@ -333,3 +333,78 @@ test('PRJ-5: .maquette file exports, re-imports hash-identical, and refuses dama
   }
   expect(errors).toEqual([]);
 });
+
+test('PRJ-6: back up all is one zip of every project; the gallery shows days since the last backup', async () => {
+  const { page, done, errors } = await launch();
+  const r: Record<string, unknown> = {};
+  try {
+    const idA = await currentId(page);
+    const hA = await strokeSaved(page);
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    await page.getByRole('button', { name: 'New sphere…' }).click();
+    await page.getByRole('button', { name: 'Create' }).click();
+    const idB = await waitCurrent(page, (id) => id !== idA);
+    const hB = await strokeSaved(page, 40);
+    await lib(page, { op: 'rename', projectId: idA, name: 'Head' });
+    await lib(page, { op: 'rename', projectId: idB, name: 'Hand' });
+
+    // Before any backup: the plain warning and "never".
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    await expect(page.locator('.backup-age')).toHaveAttribute('data-days', 'never');
+    await expect(page.getByText('Deleting the Maquette icon from the Home Screen deletes all of them.', { exact: false })).toBeVisible();
+
+    const t0 = Date.now();
+    await page.getByRole('button', { name: 'Back up all…' }).click();
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('[data-prepared="backup"]').getByRole('button', { name: 'Download' }).click()]);
+    r.backupMs = Date.now() - t0;
+    const file = 'test-results/prj6-backup.zip';
+    await dl.saveAs(file);
+    const bytes = readFileSync(file);
+    const z = unzip(bytes);
+    const index = JSON.parse(z.get('maquette-backup.json')!.data.toString('utf8'));
+    const folders = index.projects.map((p: { folder: string }) => p.folder);
+    r.backup = { name: dl.suggestedFilename(), bytes: bytes.length, entries: z.size, projects: index.projects.length, folders, crcsValid: crcOk(z) };
+    expect(dl.suggestedFilename()).toMatch(/^Maquette backup \d{4}-\d{2}-\d{2}\.zip$/);
+    expect(index.projects.length).toBe(2);
+    expect(crcOk(z)).toBe(true);
+    for (const f of folders) for (const name of ['maquette.json', 'topo.bin', 'positions.bin']) expect(z.has(`${f}/${name}`)).toBe(true);
+
+    // Days since the last backup.
+    await expect(page.locator('.backup-age')).toHaveAttribute('data-days', '0');
+    await expect(page.locator('.backup-age')).toHaveText('Last backed up today.');
+    await page.evaluate(async () => {
+      const lib = (window as any).__maquette.library;
+      lib.setPref({ lastBackupAt: new Date(Date.now() - 3 * 864e5 - 60_000).toISOString() });
+      await lib.savePrefsNow();
+    });
+    await page.reload();
+    await ready(page);
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    await expect(page.locator('.backup-age')).toHaveText('Last backed up 3 days ago.');
+    r.daysShownAfterBackdate = Number(await page.locator('.backup-age').getAttribute('data-days'));
+
+    // Restore: importing the backup brings every project back, mesh-identical.
+    await page.locator('input[type=file][data-feature="PRJ-5"]').setInputFiles(file);
+    await expect(page.getByText('Imported 2 projects.')).toBeVisible();
+    const all = await list(page);
+    const restored = all.filter((p) => p.id !== idA && p.id !== idB);
+    r.liveAfterRestore = all.length;
+    expect(restored.map((p) => p.name).sort()).toEqual(['Hand', 'Head']);
+    const hashes: Record<string, boolean> = {};
+    for (const [name, h] of [
+      ['Head', hA],
+      ['Hand', hB],
+    ] as const) {
+      const p = restored.find((x) => x.name === name)!;
+      await page.evaluate((id) => (window as any).__maquette.library.openProject(id), p.id);
+      hashes[name] = (await q(page)).hash === h;
+    }
+    r.restoredHashesMatch = hashes;
+    expect(hashes).toEqual({ Head: true, Hand: true });
+  } finally {
+    r.pageErrors = errors;
+    save('prj6-backup', r);
+    await done();
+  }
+  expect(errors).toEqual([]);
+});
