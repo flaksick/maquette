@@ -54,7 +54,7 @@ mod tests {
     use crate::sphere::cube_sphere;
 
     #[test]
-    fn sphere_exports_as_quads() {
+    fn exp1_sphere_exports_as_quads() {
         let n = 10;
         let m = EditMesh::from_trimesh(cube_sphere(n), 64);
         let mut out = Vec::new();

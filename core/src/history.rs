@@ -292,7 +292,7 @@ mod tests {
     }
 
     #[test]
-    fn undo_redo_restore_exact_hashes() {
+    fn und1_undo_redo_restore_exact_hashes() {
         let mut m = mesh();
         let h0 = m.position_hash();
         let mut tx = Transaction::new(m.nleaves());
@@ -311,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn history_respects_budget() {
+    fn und1_history_respects_budget() {
         let m = mesh();
         let mut hist = History::new(10_000, 1000);
         for _ in 0..50 {
@@ -323,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn records_roundtrip_and_reject_damage() {
+    fn prj4_records_roundtrip_and_reject_damage() {
         let mut m = mesh();
         let mut tx = Transaction::new(m.nleaves());
         tx.begin();

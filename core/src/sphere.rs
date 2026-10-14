@@ -116,7 +116,7 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn counts_match_formula() {
+    fn prm1_counts_match_formula() {
         for n in [1u32, 2, 3, 7, 16] {
             let m = cube_sphere(n);
             assert_eq!(m.nverts(), (6 * n * n + 2) as usize);
@@ -125,7 +125,7 @@ mod tests {
     }
 
     #[test]
-    fn closed_oriented_manifold_genus0() {
+    fn prm1_closed_oriented_manifold_genus0() {
         let m = cube_sphere(9);
         // Every directed edge appears exactly once and its reverse exactly once.
         let mut directed: HashMap<(u32, u32), u32> = HashMap::new();
@@ -144,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn on_unit_sphere_and_outward() {
+    fn prm1_on_unit_sphere_and_outward() {
         let m = cube_sphere(12);
         for i in 0..m.nverts() {
             let r = crate::math::len_sq(get3(&m.positions, i)).sqrt();

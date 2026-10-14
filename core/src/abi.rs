@@ -215,8 +215,19 @@ fn shared() -> &'static mut Shared {
     SHARED.with(|p| unsafe { &mut **p })
 }
 
-fn with_engine<R>(f: impl FnOnce(&mut Engine) -> R) -> Option<R> {
+/// Runs `f` on the engine, if one is loaded. Exports in other modules (io, remesh) use it too.
+pub(crate) fn with_engine<R>(f: impl FnOnce(&mut Engine) -> R) -> Option<R> {
     ENGINE.with(|e| e.borrow_mut().as_deref_mut().map(f))
+}
+
+/// Replaces the engine's mesh: sphere, project load, import, remesh. The old engine is freed
+/// first, so peak memory holds one engine, not two. Brush and camera live in the engine, so the
+/// worker re-sends both after any install.
+pub(crate) fn install_mesh(mesh: EditMesh) {
+    ENGINE.with(|e| {
+        *e.borrow_mut() = None;
+        *e.borrow_mut() = Some(Box::new(Engine::new(mesh)));
+    });
 }
 
 #[unsafe(no_mangle)]
@@ -235,11 +246,7 @@ pub extern "C" fn eng_samples_ptr(nfloats: u32) -> *mut f32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn eng_new_sphere(n: u32, leaf_max: u32) -> u32 {
-    let mesh = EditMesh::from_trimesh(crate::sphere::cube_sphere(n.max(1)), leaf_max.max(16) as usize);
-    ENGINE.with(|e| {
-        *e.borrow_mut() = None; // free first: peak memory is one mesh, not two
-        *e.borrow_mut() = Some(Box::new(Engine::new(mesh)));
-    });
+    install_mesh(EditMesh::from_trimesh(crate::sphere::cube_sphere(n.max(1)), leaf_max.max(16) as usize));
     1
 }
 
@@ -250,10 +257,7 @@ pub extern "C" fn eng_load(topo: *const u8, topo_len: u32, pos: *const u8, pos_l
     let p = unsafe { std::slice::from_raw_parts(pos, pos_len as usize) };
     match crate::store::load(t, p) {
         Ok(mesh) => {
-            ENGINE.with(|e| {
-                *e.borrow_mut() = None;
-                *e.borrow_mut() = Some(Box::new(Engine::new(mesh)));
-            });
+            install_mesh(mesh);
             1
         }
         Err(err) => -(err as i32) - 1,
