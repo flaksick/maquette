@@ -130,6 +130,7 @@ export function isQuotaError(e: unknown): boolean {
  *  disk throws, and storage numbers report it. Null = the real disk. */
 export const disk = {
   allowance: null as number | null,
+  reportedFree: null as number | null,
   spend(n: number): void {
     if (this.allowance === null) return;
     if (n > this.allowance) throw new DOMException(`The disk is full (simulated: ${this.allowance} bytes left).`, 'QuotaExceededError');
@@ -144,7 +145,7 @@ export async function storageNumbers(): Promise<StorageNumbers> {
     persisted = await navigator.storage.persisted();
   } catch {}
   const usage = est.usage ?? 0;
-  if (disk.allowance !== null) return { usage, quota: usage + disk.allowance, persisted, simulated: true };
+  if (disk.allowance !== null) return { usage, quota: usage + (disk.reportedFree ?? disk.allowance), persisted, simulated: true };
   return { usage, quota: est.quota ?? 0, persisted, simulated: false };
 }
 
@@ -612,7 +613,7 @@ async function setPrefs(ctx: LibraryCtx, prefs: Prefs): Promise<void> {
 
 /** Purges Recently Deleted projects older than 30 days and removes folders that never got a
  *  manifest (an interrupted create, duplicate, import or purge). Returns what it did. */
-async function maintenance(ctx: LibraryCtx): Promise<{ purged: number; garbage: number; garbageBytes: number }> {
+async function maintenance(ctx: LibraryCtx, minAgeMs = GARBAGE_MIN_AGE_MS): Promise<{ purged: number; garbage: number; garbageBytes: number }> {
   const projects = await projectsDir(ctx);
   let purged = 0;
   let garbage = 0;
@@ -632,12 +633,47 @@ async function maintenance(ctx: LibraryCtx): Promise<{ purged: number; garbage: 
     }
     const files = await filesOf(dir);
     const newest = Math.max(0, ...[...files.values()].map((f) => f.lastModified));
-    if (now - newest < GARBAGE_MIN_AGE_MS) continue;
+    if (now - newest < minAgeMs) continue;
     garbageBytes += [...files.values()].reduce((n, f) => n + f.size, 0);
     await removeDir(ctx, id);
     garbage++;
   }
   return { purged, garbage, garbageBytes };
+}
+
+// ---------- dev-channel test hooks ----------
+
+async function debugOp(ctx: LibraryCtx, m: Extract<ToLibrary, { op: `debug-${string}` }>): Promise<unknown> {
+  switch (m.op) {
+    case 'debug-disk':
+      disk.allowance = m.allowance;
+      disk.reportedFree = m.reportedFree ?? null;
+      return null;
+    case 'debug-backdate': {
+      // Ages a Recently Deleted entry, to test the 30-day purge without waiting 30 days.
+      const { dir, m: man } = await mustManifest(ctx, m.projectId);
+      if (!man.deletedAt) throw invalid('not in Recently Deleted');
+      await ctx.writeManifest(dir, { ...man, gen: man.gen + 1, deletedAt: new Date(Date.parse(man.deletedAt) - m.days * DAY).toISOString() });
+      return null;
+    }
+    case 'debug-folders': {
+      // Every folder under projects/, valid or not: proves no half-written project is left.
+      let total = 0;
+      let withManifest = 0;
+      for await (const [, h] of entriesOf(await projectsDir(ctx))) {
+        if (h.kind !== 'directory') continue;
+        total++;
+        if (await ctx.loadManifest(h as FileSystemDirectoryHandle)) withManifest++;
+      }
+      return { total, withManifest };
+    }
+    case 'debug-garbage': {
+      // What an interrupted create/import leaves: files, no manifest.
+      const id = crypto.randomUUID();
+      await ctx.writeWhole(await ctx.projectDir(id, true), 'topo.bin', new Uint8Array(1024));
+      return id;
+    }
+  }
 }
 
 // ---------- dispatch ----------
@@ -683,11 +719,14 @@ export async function handleLibrary(ctx: LibraryCtx, m: ToLibrary, reply: (r: Li
         value = await storageNumbers();
         break;
       case 'maintenance':
-        value = await maintenance(ctx);
+        value = await maintenance(ctx, ctx.channel() === 'dev' && m.minAgeMs !== undefined ? m.minAgeMs : GARBAGE_MIN_AGE_MS);
         break;
       case 'debug-disk':
+      case 'debug-backdate':
+      case 'debug-folders':
+      case 'debug-garbage':
         if (ctx.channel() !== 'dev') throw invalid('debug hooks exist only in the dev channel');
-        disk.allowance = m.allowance;
+        value = await debugOp(ctx, m);
         break;
     }
     reply({ id: m.id, ok: true, value });

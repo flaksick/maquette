@@ -76,8 +76,13 @@ export type ToLibrary =
   | { id: number; op: 'prefs-get' }
   | { id: number; op: 'prefs-set'; prefs: Prefs }
   | { id: number; op: 'storage' }
-  | { id: number; op: 'maintenance' }
-  | { id: number; op: 'debug-disk'; allowance: number | null };
+  | { id: number; op: 'maintenance'; minAgeMs?: number }
+  // Dev-channel test hooks (refused in prod). debug-disk: a disk with `allowance` bytes left;
+  // `reportedFree` makes the estimate claim more than that, as a real full disk can.
+  | { id: number; op: 'debug-disk'; allowance: number | null; reportedFree?: number | null }
+  | { id: number; op: 'debug-backdate'; projectId: string; days: number }
+  | { id: number; op: 'debug-folders' }
+  | { id: number; op: 'debug-garbage' };
 
 export type LibraryOp = ToLibrary['op'];
 
