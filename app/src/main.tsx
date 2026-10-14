@@ -9,6 +9,7 @@ import { SHEETS, ui } from './state';
 import { bus } from './bus';
 import { InputController } from './input';
 import { registerServiceWorker } from './sw-client';
+import { onRemeshEvent } from './remesh';
 import type { FromEngine, ToEngine } from './shared/protocol';
 
 
@@ -105,6 +106,9 @@ function onEngine(m: FromEngine): void {
       break;
     case 'query-result':
       queryWaiters.shift()?.(m);
+      break;
+    case 'remesh':
+      onRemeshEvent(m.ev);
       break;
   }
 }

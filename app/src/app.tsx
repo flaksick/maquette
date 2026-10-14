@@ -7,6 +7,7 @@ import { offline, updateWaiting, autoUpdate, setAutoUpdate, checkForUpdate } fro
 import BalloonWorker from './balloon.worker?worker';
 import type { ToolName } from './shared/protocol';
 import { BUDGET, CHANNEL } from './config';
+import { RemeshButton, RemeshProgress, RemeshSheet } from './remesh'; // TOP-1
 
 const TOOLS: { id: ToolName; label: string; feature: string }[] = [
   { id: 'draw', label: 'Draw', feature: 'BRS-1' },
@@ -55,6 +56,7 @@ function TopBar() {
           Mirror X
         </button>
         <button data-feature="PRM-1" onClick={() => (ui.sheet.value = 'new')}>New</button>
+        <RemeshButton />
         <button data-feature="EXP-7" onClick={() => {
           ui.exportFile.value = null;
           ui.sheet.value = 'export';
@@ -405,12 +407,14 @@ export function App() {
         <Hud />
         <ViewButtons />
         <Notice />
+        <RemeshProgress />
         {!ui.ready.value && <div class="loading">Loading your sculpt…</div>}
       </main>
       {sheet === 'new' && <NewSheet />}
       {sheet === 'export' && <ExportSheet />}
       {sheet === 'settings' && <SettingsSheet />}
       {sheet === 'diag' && <DiagSheet />}
+      {sheet === 'remesh' && <RemeshSheet />}
     </div>
   );
 }
