@@ -5,6 +5,7 @@ import { Core } from './wasm';
 import { Renderer } from './renderer';
 import { Camera, type V3 } from './camera';
 import {
+  FALLOFFS,
   TOOL_ID,
   type BrushState,
   type FromEngine,
@@ -162,8 +163,10 @@ function commitCamera(): void {
 
 function setBrush(b: BrushState): void {
   brush = b;
-  const flags = (b.pressureRadius ? 1 : 0) | (b.pressureStrength ? 2 : 0) | (b.symmetryX ? 4 : 0) | 8;
-  core.x.eng_set_brush(TOOL_ID[b.tool], b.radiusPx * dpr, b.strength, flags, b.gamma, 0.1);
+  const flags = (b.pressureRadius ? 1 : 0) | (b.pressureStrength ? 2 : 0) | (b.symmetryX ? 4 : 0) | 8 | (b.symmetryY ? 16 : 0) | (b.symmetryZ ? 32 : 0);
+  core.x.eng_set_brush(TOOL_ID[b.tool] ?? 0, b.radiusPx * dpr, b.strength, flags, b.gamma, 0.1);
+  const falloff = Math.max(0, FALLOFFS.indexOf(b.falloff ?? 'smooth'));
+  core.x.eng_set_brush_ext(falloff, b.hardness ?? 0, b.autosmooth ?? 0, b.accumulate === false ? 0 : 1);
 }
 
 function frameView(reset: boolean): void {
