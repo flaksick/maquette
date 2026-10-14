@@ -206,6 +206,29 @@ else {
   }
 }
 
+// ----- [io] Blender oracle (EXP-2) on the STL tests/io.spec.ts just exported (io stream's block) -----
+{
+  const stl = 'test-results/export.stl';
+  rmSync('test-results/oracle-stl.json', { force: true });
+  const want = 'tris + positions exact, bbox <= 1e-4';
+  if (!existsSync(BLENDER)) rec('Blender oracle (EXP-2)', 'Blender not installed', want, null);
+  else if (!existsSync(stl) || statSync(stl).mtimeMs < e2eStart) rec('Blender oracle (EXP-2)', 'no fresh STL export (e2e skipped?)', want, null);
+  else {
+    const r = sh(`"${BLENDER}" --background --factory-startup --python oracle/check_stl.py -- ${stl} 2>&1`);
+    const line = r.stdout.split('\n').find((l) => l.startsWith('ORACLE '));
+    const o = line ? JSON.parse(line.slice(7)) : null;
+    if (o) writeFileSync('test-results/oracle-stl.json', JSON.stringify({ ...o, stl }, null, 1));
+    rec(
+      'Blender oracle (EXP-2)',
+      o ? `tris ${o.blender.faces}/${o.file.triangles} v ${o.blender.vertices}/${o.file.unique_positions} Δ ${o.bbox_max_delta?.toExponential(1)}` : 'no ORACLE line',
+      want,
+      !!o?.pass,
+      o ? `Blender ${o.blender.version}; boundary edges ${o.blender.boundary_edges}` : r.stdout.trim().split('\n').slice(-2).join(' | '),
+    );
+  }
+}
+// ----- [io] end -----
+
 // 12. No fake UI (invariant 7): every control carries a feature ID of this phase or earlier
 {
   const r = sh(`node scripts/check-ui.mjs --tree ${TREE} --port ${PORT} --json test-results/ui-registry.json`);

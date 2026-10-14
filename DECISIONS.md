@@ -73,3 +73,15 @@ installed Home Screen app on iPadOS is S4's device question.
 ## 2026-10-13 · Icons are generated, not committed
 `scripts/gen-icons.mjs` renders the PNG icons at build time (no image libraries), so the public
 repo carries no binary assets.
+
+## 2026-10-14 · Import/export conventions (IMP-0/1/2, PRJ-9, EXP-2)
+- **STL is Z-up, the engine Y-up**: STL is turned (x, y, z) -> (x, z, -y) on import and back on
+  export (a 90° turn: exact). Blender's own STL import of the e2e export: bbox Δ 0.0 @ oracle/check_stl.py.
+- **Weld tolerance 1e-5 × bbox diagonal** after an exact pass: Suzanne STL welds 2,904 corners to
+  505 vertices, Blender's count @ tests/fixtures/blender_counts.json; the 2 bow-ties that weld makes
+  are split back (507).
+- **Units are metadata** (coordinates stay as in the file), saved in the project's state JSON,
+  default m. Guess: STL ≥ 5 units -> mm else m; OBJ < 10 -> m, < 1000 -> cm, else mm. The app asks.
+- **Degenerate = < 3 distinct vertices or exactly zero area**; near-zero slivers are kept (harmless
+  to normals and picking). Non-manifold edges pair by angle around the edge; two cubes sharing an
+  edge stay two closed cubes (split 2 @ imp0_defect_nonmanifold_edge).
