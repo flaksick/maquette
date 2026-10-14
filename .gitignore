@@ -25,6 +25,9 @@
 !.gitignore
 !.gitleaks.toml
 !scripts/hooks/*
+# Import fixtures (IMP-0/1/2), made by tests/fixtures/make_fixtures.py with Blender.
+!tests/fixtures/*.obj
+!tests/fixtures/*.stl
 
 # ---- hard denies (listed last so they win) ----
 node_modules/
