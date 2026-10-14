@@ -1,0 +1,613 @@
+{
+ "blender": "5.1.2",
+ "fixtures": {
+  "cube_ascii.stl": {
+   "blender": {
+    "bbox": [
+     [
+      -1.0,
+      -1.0,
+      -1.0
+     ],
+     [
+      1.0,
+      1.0,
+      1.0
+     ]
+    ],
+    "boundary_edges": 0,
+    "color_attributes": 0,
+    "edges": 18,
+    "edges_over_2_faces": 0,
+    "faces": 12,
+    "loose_parts": 1,
+    "min_distinct_distance": 2.0,
+    "ngons": 0,
+    "objects": 1,
+    "quads": 0,
+    "triangles": 12,
+    "tris": 12,
+    "unique_positions": 8,
+    "vertices": 8
+   },
+   "bytes": 1212,
+   "raw": {
+    "bbox": [
+     [
+      -1.0,
+      -1.0,
+      -1.0
+     ],
+     [
+      1.0,
+      1.0,
+      1.0
+     ]
+    ],
+    "boundary_edges": 0,
+    "color_attributes": 0,
+    "edges": 18,
+    "edges_over_2_faces": 0,
+    "faces": 12,
+    "flipped_by_recalc_outside": 0,
+    "loose_parts": 1,
+    "ngons": 0,
+    "objects": 1,
+    "quads": 0,
+    "triangles": 12,
+    "tris": 12,
+    "unique_positions": 8,
+    "vertices": 8
+   }
+  },
+  "cube_binary.stl": {
+   "blender": {
+    "bbox": [
+     [
+      -1.0,
+      -1.0,
+      -1.0
+     ],
+     [
+      1.0,
+      1.0,
+      1.0
+     ]
+    ],
+    "boundary_edges": 0,
+    "color_attributes": 0,
+    "edges": 18,
+    "edges_over_2_faces": 0,
+    "faces": 12,
+    "loose_parts": 1,
+    "min_distinct_distance": 2.0,
+    "ngons": 0,
+    "objects": 1,
+    "quads": 0,
+    "triangles": 12,
+    "tris": 12,
+    "unique_positions": 8,
+    "vertices": 8
+   },
+   "bytes": 684,
+   "raw": {
+    "bbox": [
+     [
+      -1.0,
+      -1.0,
+      -1.0
+     ],
+     [
+      1.0,
+      1.0,
+      1.0
+     ]
+    ],
+    "boundary_edges": 0,
+    "color_attributes": 0,
+    "edges": 18,
+    "edges_over_2_faces": 0,
+    "faces": 12,
+    "flipped_by_recalc_outside": 0,
+    "loose_parts": 1,
+    "ngons": 0,
+    "objects": 1,
+    "quads": 0,
+    "triangles": 12,
+    "tris": 12,
+    "unique_positions": 8,
+    "vertices": 8
+   }
+  },
+  "cube_quads.obj": {
+   "blender": {
+    "bbox": [
+     [
+      -1.0,
+      -1.0,
+      -1.0
+     ],
+     [
+      1.0,
+      1.0,
+      1.0
+     ]
+    ],
+    "boundary_edges": 0,
+    "color_attributes": 0,
+    "edges": 12,
+    "edges_over_2_faces": 0,
+    "faces": 6,
+    "loose_parts": 1,
+    "min_distinct_distance": 2.0,
+    "ngons": 0,
+    "objects": 1,
+    "quads": 6,
+    "triangles": 12,
+    "tris": 0,
+    "unique_positions": 8,
+    "vertices": 8
+   },
+   "bytes": 903,
+   "raw": {
+    "bbox": [
+     [
+      -1.0,
+      -1.0,
+      -1.0
+     ],
+     [
+      1.0,
+      1.0,
+      1.0
+     ]
+    ],
+    "boundary_edges": 0,
+    "color_attributes": 0,
+    "edges": 12,
+    "edges_over_2_faces": 0,
+    "faces": 6,
+    "flipped_by_recalc_outside": 0,
+    "loose_parts": 1,
+    "ngons": 0,
+    "objects": 1,
+    "quads": 6,
+    "triangles": 12,
+    "tris": 0,
+    "unique_positions": 8,
+    "vertices": 8
+   }
+  },
+  "defect_duplicate.obj": {
+   "blender": {
+    "bbox": [
+     [
+      -1.0,
+      -1.0,
+      -1.0
+     ],
+     [
+      1.0,
+      1.0,
+      1.0
+     ]
+    ],
+    "boundary_edges": 0,
+    "color_attributes": 0,
+    "edges": 12,
+    "edges_over_2_faces": 0,
+    "faces": 6,
+    "loose_parts": 1,
+    "min_distinct_distance": 2.0,
+    "ngons": 0,
+    "objects": 1,
+    "quads": 6,
+    "triangles": 12,
+    "tris": 0,
+    "unique_positions": 8,
+    "vertices": 8
+   },
+   "bytes": 533,
+   "defect": {
+    "duplicate_faces": 2,
+    "what": "cube + face 1 repeated + face 4 repeated reversed"
+   },
+   "raw": {
+    "bbox": [
+     [
+      -1.0,
+      -1.0,
+      -1.0
+     ],
+     [
+      1.0,
+      1.0,
+      1.0
+     ]
+    ],
+    "boundary_edges": 0,
+    "color_attributes": 0,
+    "edges": 12,
+    "edges_over_2_faces": 7,
+    "faces": 8,
+    "flipped_by_recalc_outside": 0,
+    "loose_parts": 1,
+    "ngons": 0,
+    "objects": 1,
+    "quads": 8,
+    "triangles": 16,
+    "tris": 0,
+    "unique_positions": 8,
+    "vertices": 8
+   }
+  },
+  "defect_flipped.obj": {
+   "blender": {
+    "bbox": [
+     [
+      -1.0,
+      -1.0,
+      -1.0
+     ],
+     [
+      1.0,
+      1.0,
+      1.0
+     ]
+    ],
+    "boundary_edges": 0,
+    "color_attributes": 0,
+    "edges": 12,
+    "edges_over_2_faces": 0,
+    "faces": 6,
+    "loose_parts": 1,
+    "min_distinct_distance": 2.0,
+    "ngons": 0,
+    "objects": 1,
+    "quads": 6,
+    "triangles": 12,
+    "tris": 0,
+    "unique_positions": 8,
+    "vertices": 8
+   },
+   "bytes": 495,
+   "defect": {
+    "flipped_faces": 2,
+    "what": "cube with faces 2 and 5 wound inward"
+   },
+   "raw": {
+    "bbox": [
+     [
+      -1.0,
+      -1.0,
+      -1.0
+     ],
+     [
+      1.0,
+      1.0,
+      1.0
+     ]
+    ],
+    "boundary_edges": 0,
+    "color_attributes": 0,
+    "edges": 12,
+    "edges_over_2_faces": 0,
+    "faces": 6,
+    "flipped_by_recalc_outside": 2,
+    "loose_parts": 1,
+    "ngons": 0,
+    "objects": 1,
+    "quads": 6,
+    "triangles": 12,
+    "tris": 0,
+    "unique_positions": 8,
+    "vertices": 8
+   }
+  },
+  "defect_hole.obj": {
+   "blender": {
+    "bbox": [
+     [
+      -1.0,
+      -1.0,
+      -1.0
+     ],
+     [
+      1.0,
+      1.0,
+      1.0
+     ]
+    ],
+    "boundary_edges": 4,
+    "color_attributes": 0,
+    "edges": 12,
+    "edges_over_2_faces": 0,
+    "faces": 5,
+    "loose_parts": 1,
+    "min_distinct_distance": 2.0,
+    "ngons": 0,
+    "objects": 1,
+    "quads": 5,
+    "triangles": 10,
+    "tris": 0,
+    "unique_positions": 8,
+    "vertices": 8
+   },
+   "bytes": 474,
+   "defect": {
+    "boundary_edges": 4,
+    "what": "cube with its last face deleted"
+   },
+   "raw": {
+    "bbox": [
+     [
+      -1.0,
+      -1.0,
+      -1.0
+     ],
+     [
+      1.0,
+      1.0,
+      1.0
+     ]
+    ],
+    "boundary_edges": 4,
+    "color_attributes": 0,
+    "edges": 12,
+    "edges_over_2_faces": 0,
+    "faces": 5,
+    "flipped_by_recalc_outside": 0,
+    "loose_parts": 1,
+    "ngons": 0,
+    "objects": 1,
+    "quads": 5,
+    "triangles": 10,
+    "tris": 0,
+    "unique_positions": 8,
+    "vertices": 8
+   }
+  },
+  "defect_nonmanifold.obj": {
+   "blender": {
+    "bbox": [
+     [
+      -1.0,
+      0.0,
+      -1.0
+     ],
+     [
+      1.0,
+      1.0,
+      1.0
+     ]
+    ],
+    "boundary_edges": 0,
+    "color_attributes": 0,
+    "edges": 23,
+    "edges_over_2_faces": 1,
+    "faces": 12,
+    "loose_parts": 1,
+    "min_distinct_distance": 1.0,
+    "ngons": 0,
+    "objects": 1,
+    "quads": 12,
+    "triangles": 24,
+    "tris": 0,
+    "unique_positions": 14,
+    "vertices": 14
+   },
+   "bytes": 792,
+   "defect": {
+    "components_after_split": 2,
+    "nonmanifold_edges": 1,
+    "vertex_copies_to_split": 2,
+    "what": "two cubes sharing one edge (4 faces on it)"
+   },
+   "raw": {
+    "bbox": [
+     [
+      -1.0,
+      0.0,
+      -1.0
+     ],
+     [
+      1.0,
+      1.0,
+      1.0
+     ]
+    ],
+    "boundary_edges": 0,
+    "color_attributes": 0,
+    "edges": 23,
+    "edges_over_2_faces": 1,
+    "faces": 12,
+    "flipped_by_recalc_outside": 0,
+    "loose_parts": 1,
+    "ngons": 0,
+    "objects": 1,
+    "quads": 12,
+    "triangles": 24,
+    "tris": 0,
+    "unique_positions": 14,
+    "vertices": 14
+   }
+  },
+  "monkey_binary.stl": {
+   "blender": {
+    "bbox": [
+     [
+      -1.3671875,
+      -0.8515625,
+      -0.984375
+     ],
+     [
+      1.3671875,
+      0.8515625,
+      0.984375
+     ]
+    ],
+    "boundary_edges": 42,
+    "color_attributes": 0,
+    "edges": 1473,
+    "edges_over_2_faces": 0,
+    "faces": 968,
+    "loose_parts": 3,
+    "min_distinct_distance": 0.015625,
+    "ngons": 0,
+    "objects": 1,
+    "quads": 0,
+    "triangles": 968,
+    "tris": 968,
+    "unique_positions": 505,
+    "vertices": 505
+   },
+   "bytes": 48484,
+   "raw": {
+    "bbox": [
+     [
+      -1.3671875,
+      -0.8515625,
+      -0.984375
+     ],
+     [
+      1.3671875,
+      0.8515625,
+      0.984375
+     ]
+    ],
+    "boundary_edges": 42,
+    "color_attributes": 0,
+    "edges": 1473,
+    "edges_over_2_faces": 0,
+    "faces": 968,
+    "flipped_by_recalc_outside": 0,
+    "loose_parts": 3,
+    "ngons": 0,
+    "objects": 1,
+    "quads": 0,
+    "triangles": 968,
+    "tris": 968,
+    "unique_positions": 505,
+    "vertices": 505
+   }
+  },
+  "monkey_subdiv.obj": {
+   "blender": {
+    "bbox": [
+     [
+      -1.3259350061416626,
+      -0.9704859852790833,
+      -0.7782660126686096
+     ],
+     [
+      1.3259350061416626,
+      0.9392359852790833,
+      0.8223199844360352
+     ]
+    ],
+    "boundary_edges": 84,
+    "color_attributes": 0,
+    "edges": 3978,
+    "edges_over_2_faces": 0,
+    "faces": 1968,
+    "loose_parts": 3,
+    "min_distinct_distance": 0.0071009344058093225,
+    "ngons": 0,
+    "objects": 1,
+    "quads": 1968,
+    "triangles": 3936,
+    "tris": 0,
+    "unique_positions": 2012,
+    "vertices": 2012
+   },
+   "bytes": 99740,
+   "raw": {
+    "bbox": [
+     [
+      -1.3259350061416626,
+      -0.9704859852790833,
+      -0.7782660126686096
+     ],
+     [
+      1.3259350061416626,
+      0.9392359852790833,
+      0.8223199844360352
+     ]
+    ],
+    "boundary_edges": 84,
+    "color_attributes": 0,
+    "edges": 3978,
+    "edges_over_2_faces": 0,
+    "faces": 1968,
+    "flipped_by_recalc_outside": 0,
+    "loose_parts": 3,
+    "ngons": 0,
+    "objects": 1,
+    "quads": 1968,
+    "triangles": 3936,
+    "tris": 0,
+    "unique_positions": 2012,
+    "vertices": 2012
+   }
+  },
+  "prism_ngon.obj": {
+   "blender": {
+    "bbox": [
+     [
+      -0.9749280214309692,
+      -1.0,
+      -1.0
+     ],
+     [
+      0.9749280214309692,
+      1.0,
+      0.9009690284729004
+     ]
+    ],
+    "boundary_edges": 0,
+    "color_attributes": 0,
+    "edges": 21,
+    "edges_over_2_faces": 0,
+    "faces": 9,
+    "loose_parts": 1,
+    "min_distinct_distance": 0.8677669915148805,
+    "ngons": 2,
+    "objects": 1,
+    "quads": 7,
+    "triangles": 24,
+    "tris": 0,
+    "unique_positions": 14,
+    "vertices": 14
+   },
+   "bytes": 953,
+   "raw": {
+    "bbox": [
+     [
+      -0.9749280214309692,
+      -1.0,
+      -1.0
+     ],
+     [
+      0.9749280214309692,
+      1.0,
+      0.9009690284729004
+     ]
+    ],
+    "boundary_edges": 0,
+    "color_attributes": 0,
+    "edges": 21,
+    "edges_over_2_faces": 0,
+    "faces": 9,
+    "flipped_by_recalc_outside": 0,
+    "loose_parts": 1,
+    "ngons": 2,
+    "objects": 1,
+    "quads": 7,
+    "triangles": 24,
+    "tris": 0,
+    "unique_positions": 14,
+    "vertices": 14
+   }
+  }
+ }
+}

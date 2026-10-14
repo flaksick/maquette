@@ -9,7 +9,13 @@
 // in 4 MB chunks (journal appends are served between chunks: they go to the new segment), then
 // flips the manifest slot, then deletes the old segment. Recovery replays every segment at or
 // after the manifest's journalGen; records are absolute leaf states, so replay is idempotent.
-import { STORAGE_ROOT, type OpenResult, type PersistReply, type ToPersist } from '../shared/protocol';
+//
+// The project library (gallery, project files, backups, preferences: P1b) lives in library.ts
+// and reaches this worker over a second port from the main thread; its messages share the queue.
+import { STORAGE_ROOT, type BudgetReply, type OpenResult, type PersistReply, type SessionStartResult, type ToPersist } from '../shared/protocol';
+import type { ToLibrary } from '../shared/library';
+import { disk, handleLibrary, isQuotaError, newestLive, storageNumbers, type LibraryCtx } from './library';
+import { applyStress, learn, normalizeBudget, stressFromMarker, type BudgetChange, type BudgetState, type SessionRecord, type StressMarker, type StressResult } from '../budget';
 import { positionsFileOf, replaceMesh, topoFileOf } from './replace';
 
 interface SyncHandle {
@@ -33,6 +39,8 @@ interface Manifest {
   /** Data file names (TOP-1 replace-mesh); absent = topo.bin / positions.bin. */
   topoFile?: string;
   positionsFile?: string;
+  /** Set while the project is in Recently Deleted (PRJ-1, library.ts). */
+  deletedAt?: string;
   crc?: number;
 }
 
@@ -40,7 +48,6 @@ const CHUNK = 4 * 1024 * 1024;
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 let channel = 'dev';
-let port: MessagePort | null = null;
 
 // ---------- small helpers ----------
 
@@ -181,17 +188,29 @@ async function attach(id: string, dir: FileSystemDirectoryHandle, manifest: Mani
   await writeWhole(await root(), 'index.json', enc.encode(JSON.stringify({ lastProject: id })));
 }
 
+/** Reopens the last project; if it is gone or in Recently Deleted (deleted, then the app died
+ *  before it switched away), the most recently modified live project instead. */
 async function openLast(): Promise<OpenResult> {
   const idx = await readJson<{ lastProject?: string }>(await root(), 'index.json');
-  if (!idx?.lastProject) return { status: 'none' };
+  if (idx?.lastProject) {
+    const r = await openProject(idx.lastProject);
+    if (r.status === 'ok') return r;
+  }
+  const fallback = await newestLive(libCtx);
+  return fallback ? openProject(fallback) : { status: 'none' };
+}
+
+/** Opens a project by id: the same recovery for a launch and a gallery switch. Nothing changes
+ *  (the previous project stays attached) unless the project's files are all readable. */
+async function openProject(id: string): Promise<OpenResult> {
   let dir: FileSystemDirectoryHandle;
   try {
-    dir = await projectDir(idx.lastProject);
+    dir = await projectDir(id);
   } catch {
     return { status: 'none' };
   }
   const manifest = await loadManifest(dir);
-  if (!manifest) return { status: 'none' };
+  if (!manifest || manifest.deletedAt) return { status: 'none' };
   const topo = await readFile(dir, topoFileOf(manifest));
   const positions = await readFile(dir, positionsFileOf(manifest));
   if (!topo || !positions) return { status: 'none' };
@@ -229,11 +248,11 @@ async function openLast(): Promise<OpenResult> {
   // Append after the newest segment. The manifest is NOT changed here: segments from a
   // checkpoint that never finished still hold records the positions file may not contain;
   // they stay until the next checkpoint completes.
-  await attach(idx.lastProject, dir, manifest, newest);
+  await attach(id, dir, manifest, newest);
   const stateBytes = await readFile(dir, 'state.json');
   return {
     status: 'ok',
-    projectId: idx.lastProject,
+    projectId: id,
     name: manifest.name,
     topo,
     positions,
@@ -257,10 +276,24 @@ async function create(id: string, name: string, topo: ArrayBuffer, positions: Ar
   } catch {}
 }
 
-function appendJournal(bytes: ArrayBuffer): void {
+// PLT-11: once the disk refuses a record, every later record is refused too until the engine
+// resends the refused one (`resume`), so the journal can never hold record N+1 without N.
+let journalBlocked = false;
+
+function appendJournal(bytes: ArrayBuffer, resume = false): void {
   if (!cur) throw new Error('no open project');
+  if (journalBlocked && !resume) throw new DOMException('An earlier stroke is still waiting for disk space.', 'QuotaExceededError');
   const b = new Uint8Array(bytes);
-  cur.journal.write(b, { at: cur.journalOffset });
+  try {
+    disk.spend(b.length);
+    cur.journal.write(b, { at: cur.journalOffset });
+  } catch (e) {
+    // A refused write may leave a partial record past journalOffset: the next append overwrites
+    // it, and recovery's CRC check stops before it if the app dies first.
+    if (isQuotaError(e)) journalBlocked = true;
+    throw e;
+  }
+  journalBlocked = false;
   cur.journal.flush();
   cur.journalOffset += b.length;
 }
@@ -275,25 +308,30 @@ async function checkpoint(seq: number, ranges: Uint32Array, data: ArrayBuffer): 
   c.journal.truncate(0);
   c.journalOffset = 0;
   c.appendGen = newGen;
-  // 2. Dirty ranges in <= 4 MB chunks, serving journal appends in between.
-  const bytes = new Uint8Array(data);
-  let src = 0;
-  for (let i = 0; i < ranges.length; i += 2) {
-    const fileOffset = ranges[i];
-    const len = ranges[i + 1];
-    for (let done = 0; done < len; done += CHUNK) {
-      const n = Math.min(CHUNK, len - done);
-      c.positions.write(bytes.subarray(src + done, src + done + n), { at: fileOffset + done });
-      await serveJournal();
+  try {
+    // 2. Dirty ranges in <= 4 MB chunks, serving journal appends in between.
+    const bytes = new Uint8Array(data);
+    let src = 0;
+    for (let i = 0; i < ranges.length; i += 2) {
+      const fileOffset = ranges[i];
+      const len = ranges[i + 1];
+      for (let done = 0; done < len; done += CHUNK) {
+        const n = Math.min(CHUNK, len - done);
+        c.positions.write(bytes.subarray(src + done, src + done + n), { at: fileOffset + done });
+        await serveJournal();
+      }
+      src += len;
     }
-    src += len;
+    c.positions.flush();
+    // 3. Flip the manifest. 4. Drop every older segment (all their records are <= seq).
+    const next: Manifest = { ...c.manifest, gen: c.manifest.gen + 1, checkpointSeq: seq, journalGen: newGen };
+    await writeManifest(c.dir, next);
+    c.manifest = next;
+  } finally {
+    // On failure (e.g. a full disk, PLT-11) the manifest still points at the old segments, which
+    // recovery replays; only the handle is released so the next checkpoint can delete the file.
+    oldJournal.close();
   }
-  c.positions.flush();
-  // 3. Flip the manifest. 4. Drop every older segment (all their records are <= seq).
-  const next: Manifest = { ...c.manifest, gen: c.manifest.gen + 1, checkpointSeq: seq, journalGen: newGen };
-  await writeManifest(c.dir, next);
-  c.manifest = next;
-  oldJournal.close();
   const stale: string[] = [];
   for await (const [name] of (c.dir as unknown as { entries(): AsyncIterable<[string, FileSystemHandle]> }).entries()) {
     const m = /^journal-(\d+)\.bin$/.exec(name);
@@ -306,64 +344,142 @@ async function checkpoint(seq: number, ranges: Uint32Array, data: ArrayBuffer): 
   }
 }
 
-// ---------- session + crash log (PLT-12) ----------
+// ---------- session + crash log (PLT-12) + device budget learning (PLT-8) ----------
+// session.json: one record per launch; the engine's beat every 2 s carries the memory ledger's
+// high-water mark. At the next session start an open record means an unclean exit; the budget
+// (budget.json) learns from it (budget.ts `learn`), and a deliberate stress test reads its marker.
 
-interface Session {
-  open: boolean;
-  start: string;
-  beat: string;
-  highWaterMB: number;
-  seq: number;
+async function readBudget(r: FileSystemDirectoryHandle): Promise<BudgetState> {
+  return normalizeBudget(await readJson<BudgetState>(r, 'budget.json'));
+}
+async function writeBudget(r: FileSystemDirectoryHandle, b: BudgetState): Promise<void> {
+  await writeWhole(r, 'budget.json', enc.encode(JSON.stringify(b)));
 }
 
-async function sessionStart(): Promise<{ uncleanExit: boolean; previous: Session | null }> {
+async function sessionStart(): Promise<SessionStartResult> {
   const r = await root();
-  const prev = await readJson<Session>(r, 'session.json');
+  const prev = await readJson<SessionRecord>(r, 'session.json');
   const unclean = !!prev?.open;
+  const now = new Date().toISOString();
+  let budget = await readBudget(r);
+  let change: BudgetChange | null = null;
+  let stress: StressResult | null = null;
+  if (prev?.deliberate === 'stress-test') {
+    const marker = await readJson<StressMarker>(r, 'stress-marker.json');
+    stress = stressFromMarker(marker, now);
+    if (stress && marker) {
+      ({ state: budget, change } = applyStress(budget, stress, now));
+      await writeWhole(r, 'stress-marker.json', enc.encode(JSON.stringify({ ...marker, applied: true })));
+    }
+  } else {
+    ({ state: budget, change } = learn(budget, prev, now));
+  }
   if (unclean) {
     const log = (await readJson<{ entries: unknown[] }>(r, 'crashlog.json')) ?? { entries: [] };
-    log.entries.push({ t: prev!.beat, kind: 'unclean-exit', highWaterMB: prev!.highWaterMB, lastSeq: prev!.seq, sessionStart: prev!.start });
+    log.entries.push({
+      t: prev!.beat,
+      kind: prev!.deliberate ? `deliberate-${prev!.deliberate}` : 'unclean-exit',
+      highWaterMB: prev!.highWaterMB,
+      budgetMB: prev!.budgetMB ?? null,
+      lastSeq: prev!.seq,
+      sessionStart: prev!.start,
+    });
     log.entries = log.entries.slice(-50);
     await writeWhole(r, 'crashlog.json', enc.encode(JSON.stringify(log)));
   }
-  const now = new Date().toISOString();
-  await writeWhole(r, 'session.json', enc.encode(JSON.stringify({ open: true, start: now, beat: now, highWaterMB: 0, seq: 0 })));
-  return { uncleanExit: unclean, previous: prev };
+  await writeBudget(r, budget);
+  const rec: SessionRecord = { open: true, start: now, beat: now, highWaterMB: 0, seq: 0, budgetMB: budget.budgetMB, deliberate: null };
+  await writeWhole(r, 'session.json', enc.encode(JSON.stringify(rec)));
+  return { uncleanExit: unclean, budget, change, stress };
 }
 
 async function sessionBeat(highWaterMB: number, seq: number): Promise<void> {
   const r = await root();
-  const s = (await readJson<Session>(r, 'session.json')) ?? { open: true, start: new Date().toISOString(), beat: '', highWaterMB: 0, seq: 0 };
+  const s = (await readJson<SessionRecord>(r, 'session.json')) ?? { open: true, start: new Date().toISOString(), beat: '', highWaterMB: 0, seq: 0 };
   await writeWhole(r, 'session.json', enc.encode(JSON.stringify({ ...s, open: true, beat: new Date().toISOString(), highWaterMB: Math.max(s.highWaterMB, highWaterMB), seq })));
 }
 
 async function sessionEnd(): Promise<void> {
   const r = await root();
-  const s = await readJson<Session>(r, 'session.json');
+  const s = await readJson<SessionRecord>(r, 'session.json');
   if (s) await writeWhole(r, 'session.json', enc.encode(JSON.stringify({ ...s, open: false })));
+}
+
+/** The app is about to kill itself on purpose (kill test, stress test): the next start must not
+ *  learn from that exit, and the stress test's marker starts fresh. */
+async function sessionMark(deliberate: 'kill-test' | 'stress-test', appMB: number): Promise<void> {
+  const r = await root();
+  const s = await readJson<SessionRecord>(r, 'session.json');
+  if (s) await writeWhole(r, 'session.json', enc.encode(JSON.stringify({ ...s, deliberate })));
+  if (deliberate === 'stress-test') {
+    const m: StressMarker = { t: new Date().toISOString(), phase: 'start', attemptMB: 0, lastOkMB: 0, appMB: Math.round(appMB), applied: false };
+    await writeWhole(r, 'stress-marker.json', enc.encode(JSON.stringify(m)));
+  }
+}
+
+/** Written and flushed BEFORE each stress allocation step: if iPadOS kills the app mid-step, the
+ *  next launch knows exactly how far it got. */
+async function stressMark(phase: 'growing' | 'ok', attemptMB: number, lastOkMB: number): Promise<void> {
+  const r = await root();
+  const m = await readJson<StressMarker>(r, 'stress-marker.json');
+  const next: StressMarker = { t: new Date().toISOString(), appMB: m?.appMB ?? 0, applied: false, phase, attemptMB, lastOkMB };
+  await writeWhole(r, 'stress-marker.json', enc.encode(JSON.stringify(next)));
+}
+
+/** A stress test that ended without a kill (allocation refused, or the cap reached). */
+async function stressEnd(outcome: 'refused' | 'capped', lastOkMB: number, failedAtMB: number | null): Promise<BudgetReply> {
+  const r = await root();
+  const now = new Date().toISOString();
+  const m = (await readJson<StressMarker>(r, 'stress-marker.json')) ?? { t: now, phase: 'start', attemptMB: 0, lastOkMB: 0, appMB: 0, applied: false };
+  const marker: StressMarker = { ...m, t: now, phase: outcome, attemptMB: failedAtMB ?? m.attemptMB, lastOkMB };
+  const stress = stressFromMarker(marker, now)!;
+  const { state, change } = applyStress(await readBudget(r), stress, now);
+  await writeBudget(r, state);
+  await writeWhole(r, 'stress-marker.json', enc.encode(JSON.stringify({ ...marker, applied: true })));
+  const s = await readJson<SessionRecord>(r, 'session.json');
+  // The app survived: this session is an ordinary one again, under the new budget.
+  if (s) await writeWhole(r, 'session.json', enc.encode(JSON.stringify({ ...s, deliberate: null, budgetMB: state.budgetMB })));
+  return { budget: state, change, stress };
 }
 
 // ---------- message pump: journal first ----------
 
-const journalQ: ToPersist[] = [];
-const otherQ: ToPersist[] = [];
+// Several ports connect: the engine and the main thread's budget port ('connect'), the stress
+// worker, and the main thread's library port ('connect-ui', P1b). Each request is answered on the
+// port it came in on; journal appends jump every other queue (invariant 4).
+interface Item {
+  m: ToPersist | ToLibrary;
+  port: MessagePort;
+}
+const journalQ: Item[] = [];
+const otherQ: Item[] = [];
 let running = false;
 
-function reply(r: PersistReply, transfer: Transferable[] = []): void {
-  port?.postMessage(r, transfer);
+/** Writes from the engine name the project they belong to; one aimed at a project that is no
+ *  longer open is refused rather than written into the wrong project. */
+function mustBeOpen(projectId?: string): void {
+  if (projectId && cur && cur.id !== projectId) throw new Error(`refused: write for project ${projectId}, but ${cur.id} is open`);
 }
 
-async function handle(m: ToPersist): Promise<void> {
+async function handle({ m, port }: Item): Promise<void> {
+  if ('op' in m) return handleLibrary(libCtx, m, (r, t) => port.postMessage(r, t ?? []));
+  const reply = (r: PersistReply, transfer: Transferable[] = []) => port.postMessage(r, transfer);
   try {
     switch (m.type) {
       case 'journal': {
         const t = performance.now();
-        appendJournal(m.bytes);
+        mustBeOpen(m.projectId);
+        appendJournal(m.bytes, m.resume);
         reply({ id: m.id, ok: true, value: { seq: m.seq, ms: performance.now() - t } });
         break;
       }
-      case 'open-last': {
-        const r = await openLast();
+      case 'open-last':
+      case 'open': {
+        // A (re)starting engine or a reopen: release the open project's locks first, so recovery
+        // can cut a torn journal tail. A switch keeps the current project attached until the
+        // new one has been read completely (openProject attaches last).
+        if (m.type === 'open-last' || cur?.id === m.projectId) await closeCurrent();
+        const r = m.type === 'open' ? await openProject(m.projectId) : await openLast();
         const transfer = [r.topo, r.positions, r.journal].filter((x): x is ArrayBuffer => !!x);
         reply({ id: m.id, ok: true, value: r }, transfer);
         break;
@@ -373,10 +489,12 @@ async function handle(m: ToPersist): Promise<void> {
         reply({ id: m.id, ok: true });
         break;
       case 'checkpoint':
+        mustBeOpen(m.projectId);
         await checkpoint(m.seq, m.ranges, m.data);
         reply({ id: m.id, ok: true, value: { seq: m.seq } });
         break;
       case 'state':
+        mustBeOpen(m.projectId);
         if (cur) await writeWhole(cur.dir, 'state.json', enc.encode(m.json));
         reply({ id: m.id, ok: true });
         break;
@@ -392,19 +510,41 @@ async function handle(m: ToPersist): Promise<void> {
         reply({ id: m.id, ok: true });
         break;
       case 'replace-mesh':
+        mustBeOpen(m.projectId);
         if (!cur) throw new Error('no open project');
         await replaceMesh(cur, { writeWhole, openHandle, writeManifest }, m.topo, m.positions, m.seq);
         reply({ id: m.id, ok: true, value: { seq: m.seq } });
         break;
       case 'estimate': {
-        const est = await navigator.storage.estimate();
-        const persisted = await navigator.storage.persisted();
-        reply({ id: m.id, ok: true, value: { usage: est.usage, quota: est.quota, persisted } });
+        const s = await storageNumbers(); // the simulated disk in PLT-11 tests, else the real one
+        reply({ id: m.id, ok: true, value: { usage: s.usage, quota: s.quota, persisted: s.persisted } });
         break;
       }
+      // ---- PLT-8 device budgets ----
+      case 'budget-get':
+        reply({ id: m.id, ok: true, value: { budget: await readBudget(await root()), change: null, stress: null } satisfies BudgetReply });
+        break;
+      case 'budget-bench': {
+        const r = await root();
+        const budget = { ...(await readBudget(r)), bench: m.bench };
+        await writeBudget(r, budget);
+        reply({ id: m.id, ok: true, value: { budget, change: null, stress: null } satisfies BudgetReply });
+        break;
+      }
+      case 'session-mark':
+        await sessionMark(m.deliberate, m.appMB);
+        reply({ id: m.id, ok: true });
+        break;
+      case 'stress-mark':
+        await stressMark(m.phase, m.attemptMB, m.lastOkMB);
+        reply({ id: m.id, ok: true });
+        break;
+      case 'stress-end':
+        reply({ id: m.id, ok: true, value: await stressEnd(m.outcome, m.lastOkMB, m.failedAtMB) });
+        break;
     }
   } catch (e) {
-    reply({ id: m.id, ok: false, error: String(e) });
+    reply({ id: m.id, ok: false, error: String(e), code: isQuotaError(e) ? 'quota' : undefined });
   }
 }
 
@@ -427,13 +567,40 @@ async function pump(): Promise<void> {
   }
 }
 
-self.onmessage = (e: MessageEvent<{ type: 'connect'; port: MessagePort; channel: string }>) => {
+// ---------- the library's port (main thread, P1b) ----------
+let uiPort: MessagePort | null = null;
+const libCtx: LibraryCtx = {
+  root,
+  projectDir,
+  openHandle,
+  writeWhole,
+  loadManifest,
+  writeManifest,
+  validPrefix,
+  serveJournal,
+  current: () => cur,
+  channel: () => channel,
+};
+
+self.onmessage = (e: MessageEvent<{ type: 'connect' | 'connect-ui'; port: MessagePort; channel: string }>) => {
+  if (e.data.type === 'connect-ui') {
+    // The main thread's port: library messages queue behind engine messages, never ahead of
+    // journal appends.
+    channel = e.data.channel;
+    const ui = e.data.port;
+    uiPort = ui;
+    ui.onmessage = (ev: MessageEvent<ToLibrary>) => {
+      otherQ.push({ m: ev.data, port: ui });
+      void pump();
+    };
+    return;
+  }
   if (e.data.type !== 'connect') return;
   channel = e.data.channel;
-  port = e.data.port;
+  const port = e.data.port;
   port.onmessage = (ev: MessageEvent<ToPersist>) => {
     // replace-mesh rides the journal queue: records after it belong to the new topology.
-    (ev.data.type === 'journal' || ev.data.type === 'replace-mesh' ? journalQ : otherQ).push(ev.data);
+    (ev.data.type === 'journal' || ev.data.type === 'replace-mesh' ? journalQ : otherQ).push({ m: ev.data, port });
     void pump();
   };
 };

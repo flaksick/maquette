@@ -4,16 +4,22 @@
 //   untagged   interactive elements (button, input, select, textarea, a[href], [role=button])
 //              with neither data-feature nor data-ui="chrome"          must be 0
 //   unknown    data-feature IDs that are not in spec.yaml               must be 0
-//   future     data-feature IDs whose phase is after current_phase      must be 0
+//   future     data-feature IDs whose phase is after current_phase and whose computed status
+//              is not PASS (FAIL, no-evidence, device-pending)          must be 0
+//   early      later-phase IDs allowed because feature-status says PASS (reported, not an error):
+//              a feature may ship before its phase only with evidence
 //   badChrome  data-ui values other than "chrome"                       must be 0
-// Usage: node scripts/check-ui.mjs [--url URL] [--tree DIR] [--port N] [--json FILE]
+// Usage: node scripts/check-ui.mjs [--url URL] [--tree DIR] [--port N] [--json FILE] [--status FILE]
 //   Without --url it serves --tree (default deploy-e2e) like GitHub Pages on --port (default
-//   $MAQUETTE_PORT or 8787) and checks the dev channel at /maquette/dev/.
+//   $MAQUETTE_PORT or 8787) and checks the dev channel at /maquette/dev/. --status reads the JSON
+//   written by feature-status.mjs (verify runs that first); without it the status is computed here
+//   (cargo test + test-results/playwright.json if present).
 import { webkit } from '@playwright/test';
 import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { computeStatus, gather, loadStatusMap } from './feature-status.mjs';
 import { loadSpec, phaseIndex } from './spec.mjs';
 
 const arg = (name, def) => {
@@ -24,6 +30,14 @@ const port = Number(arg('--port', process.env.MAQUETTE_PORT ?? '8787'));
 const tree = arg('--tree', 'deploy-e2e');
 const jsonOut = arg('--json', 'test-results/ui-registry.json');
 let url = arg('--url', null);
+const statusFile = arg('--status', null);
+
+/** id -> computed status row, every phase. */
+function statusMap() {
+  if (statusFile) return loadStatusMap(statusFile);
+  const g = gather({});
+  return new Map(computeStatus({ ...g, all: true }).map((r) => [r.id, r]));
+}
 
 // Sheets whose controls only appear after work starts: the same message the button sends.
 const PREPARE = { export: (m) => m.send({ type: 'export-obj' }) };
@@ -109,7 +123,10 @@ try {
 
   const ids = [...new Set(states.flatMap((s) => s.features))].sort();
   const unknown = ids.filter((id) => !phaseOf.has(id));
-  const future = ids.filter((id) => phaseOf.has(id) && phaseIndex(spec, phaseOf.get(id)) > current).map((id) => `${id} (${phaseOf.get(id)})`);
+  const later = ids.filter((id) => phaseOf.has(id) && phaseIndex(spec, phaseOf.get(id)) > current);
+  const st = later.length ? statusMap() : new Map();
+  const early = later.filter((id) => st.get(id)?.status === 'PASS').map((id) => `${id} (${phaseOf.get(id)}, PASS: ${st.get(id).evidence})`);
+  const future = later.filter((id) => st.get(id)?.status !== 'PASS').map((id) => `${id} (${phaseOf.get(id)}, ${st.get(id)?.status ?? 'no status'})`);
   const badChrome = [...new Set(states.flatMap((s) => s.ui))].filter((v) => v !== 'chrome');
   const untagged = states.flatMap((s) => s.untagged.map((d) => `${s.sheet}: ${d}`));
   const interactive = states.reduce((n, s) => n + s.interactive, 0);
@@ -117,10 +134,11 @@ try {
     url,
     currentPhase: spec.current_phase,
     states: states.map(({ sheet, interactive, untagged, features }) => ({ sheet, interactive, untagged, features: [...new Set(features)].sort() })),
-    totals: { states: states.length, interactive, untagged: untagged.length, unknown: unknown.length, future: future.length, badChrome: badChrome.length, featureIds: ids.length },
+    totals: { states: states.length, interactive, untagged: untagged.length, unknown: unknown.length, future: future.length, early: early.length, badChrome: badChrome.length, featureIds: ids.length },
     untagged,
     unknown,
     future,
+    early,
     badChrome,
     featureIds: ids,
     pageErrors,
@@ -130,10 +148,11 @@ try {
   for (const s of result.states) console.log(`${s.sheet.padEnd(10)} ${String(s.interactive).padStart(3)} interactive · ${s.untagged.length} untagged · features ${s.features.join(' ')}`);
   for (const u of untagged) console.log(`  untagged: ${u}`);
   for (const u of unknown) console.log(`  not in spec.yaml: ${u}`);
-  for (const u of future) console.log(`  after current phase ${spec.current_phase}: ${u}`);
+  for (const u of early) console.log(`  after ${spec.current_phase}, allowed by evidence: ${u}`);
+  for (const u of future) console.log(`  after ${spec.current_phase}, no PASS evidence: ${u}`);
   for (const u of badChrome) console.log(`  data-ui="${u}" (only "chrome" is allowed)`);
   console.log(
-    `UI registry @ ${url}: ${states.length} states, ${interactive} interactive elements, untagged ${untagged.length}, unknown IDs ${unknown.length}, future-phase IDs ${future.length}, bad data-ui ${badChrome.length}; ${ids.length} feature IDs rendered`,
+    `UI registry @ ${url}: ${states.length} states, ${interactive} interactive elements, untagged ${untagged.length}, unknown IDs ${unknown.length}, later-phase IDs ${early.length} allowed by PASS evidence / ${future.length} without, bad data-ui ${badChrome.length}; ${ids.length} feature IDs rendered`,
   );
   if (untagged.length || unknown.length || future.length || badChrome.length || pageErrors.length) exitCode = 1;
   if (pageErrors.length) console.log(`page errors: ${pageErrors.join('; ')}`);

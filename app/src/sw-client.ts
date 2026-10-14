@@ -1,22 +1,17 @@
 // Service-worker client: offline install (PLT-1), update policy (PLT-2/PLT-3 basic).
 // The only network the app ever uses is fetching its own files; auto-checks can be turned off.
 import { signal } from '@preact/signals';
+import { prefs, prefsReady, setPref } from './prefs';
 
 export const offline = signal<{ ready: boolean; version: string | null; files: number }>({ ready: false, version: null, files: 0 });
 export const updateWaiting = signal(false);
 
-const AUTO_KEY = 'maquette-auto-update';
+// The setting lives in the preferences file (PRJ-11; it was a localStorage key in P1a).
 export function autoUpdate(): boolean {
-  try {
-    return localStorage.getItem(AUTO_KEY) !== 'off';
-  } catch {
-    return true;
-  }
+  return prefs.value.autoUpdate;
 }
 export function setAutoUpdate(on: boolean): void {
-  try {
-    localStorage.setItem(AUTO_KEY, on ? 'on' : 'off');
-  } catch {}
+  setPref({ autoUpdate: on });
 }
 
 async function status(): Promise<void> {
@@ -49,6 +44,7 @@ export async function registerServiceWorker(): Promise<void> {
     reg.addEventListener('updatefound', () => watch(reg.installing));
     await status();
     if (!offline.value.ready) setTimeout(() => void status(), 4000);
+    await prefsReady; // the user's choice, not the default, decides the automatic check
     if (autoUpdate() && navigator.onLine) void reg.update().catch(() => {});
   } catch {
     // No service worker (http on the LAN, private mode): the app still runs, just not offline.

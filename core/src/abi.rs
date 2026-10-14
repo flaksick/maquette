@@ -190,7 +190,7 @@ pub extern "C" fn mq_checksum(h: u32) -> f64 {
 // One engine per instance (invariant 9: one core instance per session). JS writes the camera
 // and stroke samples into shared buffers, calls in, and reads results through pointers.
 
-use crate::engine::{Camera, Engine, Tool, CAMERA_FLOATS};
+use crate::engine::{Camera, Engine, Falloff, Tool, CAMERA_FLOATS};
 use crate::mesh::EditMesh;
 
 struct Shared {
@@ -264,6 +264,10 @@ pub extern "C" fn eng_load(topo: *const u8, topo_len: u32, pos: *const u8, pos_l
     }
 }
 
+/// Tool ids: 0 draw, 1 smooth, 2 grab, 3 inflate, 4 flatten, 5 clay, 6 clay strips, 7 crease,
+/// 8 pinch, 9 snake hook, 10 layer, 11 fill, 12 scrape, 13 planar (unknown ids draw).
+/// Flags: 1 pressure -> radius, 2 pressure -> strength, 4 mirror X, 8 preserve volume,
+/// 16 mirror Y, 32 mirror Z.
 #[unsafe(no_mangle)]
 pub extern "C" fn eng_set_brush(tool: u32, radius_px: f32, strength: f32, flags: u32, gamma: f32, spacing: f32) {
     with_engine(|e| {
@@ -274,8 +278,23 @@ pub extern "C" fn eng_set_brush(tool: u32, radius_px: f32, strength: f32, flags:
         e.brush.pressure_strength = flags & 2 != 0;
         e.brush.symmetry_x = flags & 4 != 0;
         e.brush.preserve_volume = flags & 8 != 0;
+        e.brush.symmetry_y = flags & 16 != 0;
+        e.brush.symmetry_z = flags & 32 != 0;
         e.brush.gamma = gamma.clamp(0.1, 5.0);
         e.brush.spacing = spacing.clamp(0.02, 2.0);
+    });
+}
+
+/// The rest of the brush (STK-4, STK-11), kept until changed. falloff: 0 smooth, 1 smoother,
+/// 2 sphere, 3 root, 4 sharp, 5 linear, 6 pow4, 7 inverse square, 8 constant. hardness and
+/// autosmooth 0..1. Flags: 1 accumulate (sample the current surface, not the stroke-start one).
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_set_brush_ext(falloff: u32, hardness: f32, autosmooth: f32, flags: u32) {
+    with_engine(|e| {
+        e.brush.falloff = Falloff::from_u32(falloff);
+        e.brush.hardness = if hardness.is_finite() { hardness.clamp(0.0, 1.0) } else { 0.0 };
+        e.brush.autosmooth = if autosmooth.is_finite() { autosmooth.clamp(0.0, 1.0) } else { 0.0 };
+        e.brush.accumulate = flags & 1 != 0;
     });
 }
 
