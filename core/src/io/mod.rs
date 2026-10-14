@@ -12,6 +12,7 @@
 //! unit means (mm, cm or m). Import guesses it from the bounding box and the app asks; STL export
 //! scales to millimetres with it.
 
+pub mod abi;
 pub mod cleanup;
 pub mod obj;
 pub mod stl;
@@ -210,6 +211,8 @@ pub fn detect(bytes: &[u8], hint: u32) -> Result<Format, ImportError> {
             Ok(Format::StlBinary)
         } else if stl::looks_ascii(bytes) {
             Ok(Format::StlAscii)
+        } else if bytes.len() >= 84 {
+            Err(ImportError::Truncated) // binary, but shorter than its facet count says
         } else {
             Err(ImportError::UnknownFormat)
         }

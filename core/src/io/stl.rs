@@ -18,7 +18,7 @@ use crate::mesh::EditMesh;
 pub const WELD_REL_EPS: f32 = 1e-5;
 
 /// Facets with their own corners: what an STL file holds.
-#[derive(Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct Soup {
     /// xyz per corner.
     pub corners: Vec<f32>,

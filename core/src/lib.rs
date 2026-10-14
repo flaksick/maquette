@@ -6,6 +6,7 @@ pub mod bvh;
 pub mod engine;
 pub mod gpu;
 pub mod history;
+pub mod io;
 pub mod kernels;
 pub mod mat4;
 pub mod math;
