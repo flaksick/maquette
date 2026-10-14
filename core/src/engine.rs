@@ -147,6 +147,9 @@ pub struct Engine {
     pub(crate) terms: Vec<f32>,
     pub(crate) u_w: Vec<f32>,
     pub(crate) tmp: Vec<f32>,
+    /// Smoothing neighbours of the slot vertices (CSR).
+    pub(crate) nb: Vec<u32>,
+    pub(crate) nb_off: Vec<u32>,
     pub(crate) orig_n: OrigNormals,
     /// Upper bound on how far any vertex moved since the BVH was last refit (widens selections).
     pub(crate) stale: f32,
@@ -186,6 +189,8 @@ impl Engine {
             terms: Vec::new(),
             u_w: Vec::new(),
             tmp: Vec::new(),
+            nb: Vec::new(),
+            nb_off: Vec::new(),
             orig_n: OrigNormals::new(nl),
             stale: 0.0,
             stroke: StrokeState::default(),

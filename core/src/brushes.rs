@@ -46,6 +46,10 @@ pub const CREASE_K: f32 = 0.04;
 pub const CREASE_PINCH: f32 = 0.3;
 /// Pinch: fraction of the tangential distance to the center closed per dab at strength 1.
 pub const PINCH_K: f32 = 0.5;
+/// Pinch and Crease pulls fade to zero over this inner fraction of the radius. Undamped, the
+/// spacing near the center (or the crease line) shrinks geometrically with every dab until
+/// triangles collapse; faded, it shrinks only algebraically and the mesh stays usable.
+pub const PINCH_ZONE: f32 = 0.25;
 /// Layer: the height cap, in radii at the stroke's first dab.
 pub const LAYER_HEIGHT: f32 = 0.1;
 /// Snake Hook: pull toward the motion axis, per radius travelled.
@@ -295,6 +299,103 @@ fn tangential(x: [f32; 3], n: [f32; 3]) -> [f32; 3] {
     sub(x, scale(n, dot(x, n)))
 }
 
+/// Unit vector by dividing, not multiplying by a rounded reciprocal: an axis-aligned sum comes
+/// out exactly axis-aligned (a flat plane's area normal is exactly (0, 0, 1)).
+#[inline(always)]
+fn unit(a: [f32; 3]) -> [f32; 3] {
+    let l = len_sq(a).sqrt();
+    if l > 1e-20 { [a[0] / l, a[1] / l, a[2] / l] } else { [0.0; 3] }
+}
+
+// ---------- polygons (triangulation-independent topology) ----------
+// Quads arrive split along one diagonal, and a mirror image is split along the other one, so
+// anything computed from triangles (one-rings, area-weighted normals) is not mirror-symmetric
+// even on a symmetric mesh. Brushes use the polygons instead: polygon-edge neighbours, and
+// polygon vector areas, which do not depend on the diagonal (for a quad abcd it is
+// (c - a) x (d - b), the same for either split and exactly mirrored for a mirrored quad).
+
+/// First triangle and triangle count of the polygon run containing triangle t.
+#[inline]
+fn poly_run(mesh: &EditMesh, t: usize) -> (usize, usize) {
+    let mut s = t;
+    while s > 0 && mesh.poly_next[s - 1] != 0 {
+        s -= 1;
+    }
+    let mut e = t;
+    while e + 1 < mesh.ntris() && mesh.poly_next[e] != 0 {
+        e += 1;
+    }
+    (s, e - s + 1)
+}
+
+/// Corner j of the fan polygon starting at triangle s (corners: v0, then each triangle's v1/v2).
+#[inline(always)]
+fn poly_corner(mesh: &EditMesh, s: usize, j: usize) -> u32 {
+    if j < 3 { mesh.tris[3 * s + j] } else { mesh.tris[3 * (s + j - 2) + 2] }
+}
+
+/// Twice the vector area of the polygon run (s, k), from positions `pos`.
+#[inline]
+fn poly_area2<F: Fn(usize) -> [f32; 3]>(mesh: &EditMesh, pos: &F, s: usize, k: usize) -> [f32; 3] {
+    let t = &mesh.tris;
+    let a = pos(t[3 * s] as usize);
+    if k == 2 {
+        let (b, c, d) = (pos(t[3 * s + 1] as usize), pos(t[3 * s + 2] as usize), pos(t[3 * s + 5] as usize));
+        return cross(sub(c, a), sub(d, b));
+    }
+    let mut n = [0.0f32; 3];
+    for i in s..s + k {
+        n = add(n, cross(sub(pos(t[3 * i + 1] as usize), a), sub(pos(t[3 * i + 2] as usize), a)));
+    }
+    n
+}
+
+/// Vertex normal from the vector areas of the polygons around v, summed in f64 (a vertex and its
+/// mirror partner meet their polygons in different orders; the f64 sum doesn't care).
+fn poly_normal<F: Fn(usize) -> [f32; 3]>(mesh: &EditMesh, pos: &F, v: usize) -> [f32; 3] {
+    let mut acc = [0.0f64; 3];
+    let mut last = usize::MAX;
+    for i in mesh.topo.vt_off[v] as usize..mesh.topo.vt_off[v + 1] as usize {
+        let (s, k) = poly_run(mesh, mesh.topo.vt[i] as usize);
+        if s == last {
+            continue; // the same polygon's next triangle (vt is sorted, runs are contiguous)
+        }
+        last = s;
+        let a = poly_area2(mesh, pos, s, k);
+        for c in 0..3 {
+            acc[c] += a[c] as f64;
+        }
+    }
+    normalize([acc[0] as f32, acc[1] as f32, acc[2] as f32])
+}
+
+/// Polygon-edge neighbours of v (no triangulation diagonals), sorted, appended to `out`.
+fn poly_ring(mesh: &EditMesh, v: usize, out: &mut Vec<u32>) {
+    let start = out.len();
+    let mut last = usize::MAX;
+    for i in mesh.topo.vt_off[v] as usize..mesh.topo.vt_off[v + 1] as usize {
+        let (s, k) = poly_run(mesh, mesh.topo.vt[i] as usize);
+        if s == last {
+            continue;
+        }
+        last = s;
+        let n = k + 2;
+        if let Some(j) = (0..n).find(|&j| poly_corner(mesh, s, j) == v as u32) {
+            out.push(poly_corner(mesh, s, (j + n - 1) % n));
+            out.push(poly_corner(mesh, s, (j + 1) % n));
+        }
+    }
+    out[start..].sort_unstable();
+    let mut w = start;
+    for r in start..out.len() {
+        if r == start || out[r] != out[w - 1] {
+            out[w] = out[r];
+            w += 1;
+        }
+    }
+    out.truncate(w);
+}
+
 // ---------- planes and stroke-start ("original") data (STK-11) ----------
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -354,17 +455,9 @@ impl OrigNormals {
         if self.stamp[leaf as usize] != self.id {
             self.stamp[leaf as usize] = self.id;
             self.off[leaf as usize] = (self.data.len() / 3) as u32;
+            let pos = |u: usize| orig_pos(mesh, tx, u);
             for u in a..b {
-                // Same sum as EditMesh::vertex_normal, over stroke-start positions.
-                let mut n = [0.0f32; 3];
-                for i in mesh.topo.vt_off[u] as usize..mesh.topo.vt_off[u + 1] as usize {
-                    let t = 3 * mesh.topo.vt[i] as usize;
-                    let pa = orig_pos(mesh, tx, mesh.tris[t] as usize);
-                    let pb = orig_pos(mesh, tx, mesh.tris[t + 1] as usize);
-                    let pc = orig_pos(mesh, tx, mesh.tris[t + 2] as usize);
-                    n = add(n, cross(sub(pb, pa), sub(pc, pa)));
-                }
-                self.data.extend_from_slice(&normalize(n));
+                self.data.extend_from_slice(&poly_normal(mesh, &pos, u));
             }
         }
         get3(&self.data, self.off[leaf as usize] as usize + (v - a))
@@ -535,10 +628,14 @@ impl Prim {
                 }
                 Some(scale(n, -h * f))
             }
-            Prim::Pinch { c, n, k } => Some(scale(tangential(sub(c, cur), n), k * f)),
+            Prim::Pinch { c, n, k } => {
+                let to_c = tangential(sub(c, cur), n);
+                Some(scale(to_c, k * f * fade_in(len_sq(to_c).sqrt(), r)))
+            }
             Prim::Crease { c, n_in, amp, b, line, k } => {
                 let to_c = sub(c, cur);
-                let pull = if line { scale(b, dot(to_c, b) * k * f) } else { scale(tangential(to_c, n_in), k * f) };
+                let to_line = if line { scale(b, dot(to_c, b)) } else { tangential(to_c, n_in) };
+                let pull = scale(to_line, k * f * fade_in(len_sq(to_line).sqrt(), r));
                 Some(add(scale(n_in, amp * f), pull))
             }
             Prim::Layer { h } => Some(scale(sub(add(sp, scale(nv, h)), cur), f)),
@@ -553,6 +650,12 @@ impl Prim {
             }
         }
     }
+}
+
+/// Pull damping near the target (see PINCH_ZONE): 0 at distance 0, 1 from PINCH_ZONE·r out.
+#[inline(always)]
+fn fade_in(d: f32, r: f32) -> f32 {
+    (d / (PINCH_ZONE * r)).min(1.0)
 }
 
 // ---------- the engine side: selection, sampling, dabs ----------
@@ -618,11 +721,12 @@ impl Engine {
         } else {
             return fallback;
         };
-        let n = normalize(nacc[side]);
+        let n = unit(nacc[side]);
         if n == [0.0; 3] {
             return fallback;
         }
-        Plane { point: scale(pacc[side], 1.0 / wacc[side]), normal: n }
+        let w = wacc[side];
+        Plane { point: [pacc[side][0] / w, pacc[side][1] / w, pacc[side][2] / w], normal: n }
     }
 
     /// Selects around c and returns its area plane.
@@ -631,11 +735,18 @@ impl Engine {
         self.area_plane(c, r, original, fallback)
     }
 
+    /// Each selected vertex's own normal, from polygons (see poly_normal): current positions, or
+    /// stroke-start ones when sampling the stroke start.
     fn gather_normals(&mut self, original: bool) {
         self.sel_n.clear();
         for i in 0..self.sel_v.len() {
             let v = self.sel_v[i] as usize;
-            let n = if original { self.orig_n.get(&self.mesh, &self.tx, v) } else { get3(&self.mesh.normals, v) };
+            let n = if original {
+                self.orig_n.get(&self.mesh, &self.tx, v)
+            } else {
+                let positions = &self.mesh.positions;
+                poly_normal(&self.mesh, &|u: usize| get3(positions, u), v)
+            };
             self.sel_n.extend_from_slice(&n);
         }
     }
@@ -833,10 +944,15 @@ impl Engine {
             }
         }
         self.u_w.clear();
+        self.nb.clear();
+        self.nb_off.clear();
+        self.nb_off.push(0);
         for i in 0..self.slots.verts.len() {
             self.u_w.push(tree_sum1(&self.terms[nm * i..nm * (i + 1)], nm));
             let v = self.slots.verts[i];
             self.touch_and_mark(v);
+            poly_ring(&self.mesh, v as usize, &mut self.nb);
+            self.nb_off.push(self.nb.len() as u32);
         }
         self.smooth_pass(SMOOTH_LAMBDA * s);
         if taubin {
@@ -844,12 +960,13 @@ impl Engine {
         }
     }
 
-    /// One Jacobi Laplacian pass over the slot vertices: p += k·w·(avg(neighbors) − p).
+    /// One Jacobi Laplacian pass over the slot vertices: p += k·w·(avg(neighbors) − p), with
+    /// polygon-edge neighbours (`poly_ring`, gathered by smooth_dab).
     fn smooth_pass(&mut self, k: f32) {
         self.tmp.clear();
         for i in 0..self.slots.verts.len() {
             let v = self.slots.verts[i] as usize;
-            let nb = self.mesh.neighbors(v);
+            let nb = &self.nb[self.nb_off[i] as usize..self.nb_off[i + 1] as usize];
             let p = get3(&self.mesh.positions, v);
             if nb.is_empty() {
                 self.tmp.extend_from_slice(&p);
@@ -974,5 +1091,879 @@ impl Engine {
         self.last_dab = [target[0], target[1], target[2], n[0], n[1], n[2], r];
         self.stroke.dabs += 1;
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::tests_support::camera;
+    use crate::engine::StrokeState;
+    use crate::sphere::{cube_sphere, TriMesh};
+
+    const EYE: [f32; 3] = [0.0, 0.0, 3.0];
+
+    fn with_mesh(m: TriMesh) -> Engine {
+        let mut e = Engine::new(EditMesh::from_trimesh(m, 256));
+        e.cam = camera(EYE, 800.0, 800.0);
+        e.brush.symmetry_x = false;
+        e
+    }
+
+    fn sphere(n: u32) -> Engine {
+        with_mesh(cube_sphere(n))
+    }
+
+    /// Reference plane: an n x n quad grid over [-1, 1]^2 at z = 0 facing +z (toward the eye).
+    /// With n a power of two every coordinate is exact, so the grid is exactly X/Y-symmetric.
+    fn grid(n: u32, z: f32, facing_up: bool) -> TriMesh {
+        let h = 2.0 / n as f32;
+        let mut positions = Vec::new();
+        for j in 0..=n {
+            for i in 0..=n {
+                positions.extend_from_slice(&[i as f32 * h - 1.0, j as f32 * h - 1.0, z]);
+            }
+        }
+        let id = |i: u32, j: u32| j * (n + 1) + i;
+        let (mut tris, mut poly_next) = (Vec::new(), Vec::new());
+        for j in 0..n {
+            for i in 0..n {
+                let (a, b, c, d) = (id(i, j), id(i + 1, j), id(i + 1, j + 1), id(i, j + 1));
+                if facing_up {
+                    tris.extend_from_slice(&[a, b, c, a, c, d]);
+                } else {
+                    tris.extend_from_slice(&[a, d, c, a, c, b]);
+                }
+                poly_next.extend_from_slice(&[1, 0]);
+            }
+        }
+        TriMesh { positions, tris, poly_next }
+    }
+
+    fn plane(n: u32) -> Engine {
+        with_mesh(grid(n, 0.0, true))
+    }
+
+    /// Starts a stroke without a raycast, for dabs placed directly in world space.
+    fn begin(e: &mut Engine, tool: Tool) {
+        e.brush.tool = tool;
+        e.tx.begin();
+        e.orig_n.begin(e.mesh.nleaves());
+        let mut st = StrokeState::default();
+        st.active = true;
+        st.tool = Some(tool);
+        e.stroke = st;
+    }
+
+    /// A screen-space stroke at full pressure, then a frame (normals, bounds).
+    fn stroke(e: &mut Engine, pts: &[[f32; 2]]) -> usize {
+        assert!(e.stroke_begin(pts[0][0], pts[0][1], 1.0), "stroke start missed the mesh");
+        let rest: Vec<f32> = pts[1..].iter().flat_map(|p| [p[0], p[1], 1.0]).collect();
+        e.stroke_move(&rest);
+        let n = e.stroke_end();
+        e.frame_update();
+        n
+    }
+
+    fn line(a: [f32; 2], b: [f32; 2], n: usize) -> Vec<[f32; 2]> {
+        (0..=n).map(|i| {
+            let t = i as f32 / n as f32;
+            [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+        })
+        .collect()
+    }
+
+    fn nearest(m: &EditMesh, p: [f32; 3]) -> usize {
+        (0..m.nverts()).min_by(|&a, &b| len_sq(sub(get3(&m.positions, a), p)).total_cmp(&len_sq(sub(get3(&m.positions, b), p)))).unwrap()
+    }
+
+    /// Partner of every vertex under one mirror (the vertex at the flipped position, within 1e-5).
+    fn partners(m: &EditMesh, mask: u8) -> Vec<usize> {
+        let key = |p: [f32; 3]| ((p[0] * 1e4).round() as i64, (p[1] * 1e4).round() as i64, (p[2] * 1e4).round() as i64);
+        let mut grid: std::collections::HashMap<(i64, i64, i64), Vec<usize>> = std::collections::HashMap::new();
+        for v in 0..m.nverts() {
+            grid.entry(key(get3(&m.positions, v))).or_default().push(v);
+        }
+        (0..m.nverts())
+            .map(|v| {
+                let q = flip(get3(&m.positions, v), mask);
+                let (kx, ky, kz) = key(q);
+                let mut best = (f32::INFINITY, usize::MAX);
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        for dz in -1..=1 {
+                            for &w in grid.get(&(kx + dx, ky + dy, kz + dz)).map(|v| v.as_slice()).unwrap_or(&[]) {
+                                let d = len_sq(sub(get3(&m.positions, w), q));
+                                if d < best.0 {
+                                    best = (d, w);
+                                }
+                            }
+                        }
+                    }
+                }
+                assert!(best.0 < 1e-10, "no mirror partner for vertex {v}");
+                best.1
+            })
+            .collect()
+    }
+
+    /// Largest coordinate error between each vertex's mirror image and its partner's position.
+    fn mirror_error(m: &EditMesh, maps: &[(u8, Vec<usize>)]) -> f32 {
+        let mut worst = 0.0f32;
+        for (mask, map) in maps {
+            for v in 0..m.nverts() {
+                let p = flip(get3(&m.positions, v), *mask);
+                let q = get3(&m.positions, map[v]);
+                for a in 0..3 {
+                    worst = worst.max((p[a] - q[a]).abs());
+                }
+            }
+        }
+        worst
+    }
+
+    fn tri_areas(m: &EditMesh) -> Vec<f32> {
+        m.tris.chunks(3).map(|t| {
+            let (a, b, c) = (get3(&m.positions, t[0] as usize), get3(&m.positions, t[1] as usize), get3(&m.positions, t[2] as usize));
+            0.5 * len_sq(cross(sub(b, a), sub(c, a))).sqrt()
+        })
+        .collect()
+    }
+
+    /// A stroke across the front of the sphere suited to each tool (drags drag, dabs travel).
+    fn sphere_stroke(tool: Tool) -> Vec<[f32; 2]> {
+        match tool {
+            // Off the mirror planes: a drag starting where X and Y planes cross is held still by
+            // its own mirror images (their tangential deltas cancel exactly).
+            Tool::Grab | Tool::SnakeHook => line([440.0, 370.0], [500.0, 340.0], 20),
+            _ => line([330.0, 380.0], [470.0, 430.0], 40),
+        }
+    }
+
+    // ---------- STK-4 ----------
+
+    #[test]
+    fn stk4_falloff_presets_match_formulas() {
+        let formulas: [(Falloff, fn(f64) -> f64); 9] = [
+            (Falloff::Smooth, |p| 3.0 * p * p - 2.0 * p * p * p),
+            (Falloff::Smoother, |p| p * p * p * (6.0 * p * p - 15.0 * p + 10.0)),
+            (Falloff::Sphere, |p| (2.0 * p - p * p).sqrt()),
+            (Falloff::Root, |p| p.sqrt()),
+            (Falloff::Sharp, |p| p * p),
+            (Falloff::Linear, |p| p),
+            (Falloff::Pow4, |p| p.powi(4)),
+            (Falloff::InvSquare, |p| p * (2.0 - p)),
+            (Falloff::Constant, |_| 1.0),
+        ];
+        let mut report = Vec::new();
+        for (curve, f) in formulas {
+            let mut worst = 0.0f64;
+            for i in 0..=1000 {
+                let q = i as f32 / 1000.0;
+                let want = if q < 1.0 { f(1.0 - q as f64) } else { 0.0 };
+                worst = worst.max((factor(curve, 0.0, q) as f64 - want).abs());
+            }
+            assert!(worst < 1e-6, "{curve:?} off its formula by {worst}");
+            assert_eq!(factor(curve, 0.0, 0.0), 1.0, "{curve:?} at the center");
+            assert_eq!(factor(curve, 0.0, 1.5), 0.0, "{curve:?} outside");
+            assert_eq!(factor(curve, 0.0, f32::NAN), 0.0, "{curve:?} on NaN");
+            report.push(format!("{curve:?} {worst:.1e}"));
+        }
+        println!("stk4 presets, max |factor - formula| over 1001 distances: {}", report.join(", "));
+    }
+
+    #[test]
+    fn stk4_hardness_remaps_distance() {
+        let mut worst = 0.0f32;
+        for curve in Falloff::ALL {
+            for h in [0.0f32, 0.25, 0.5, 0.9] {
+                let mut last = f32::INFINITY;
+                for i in 0..=1000 {
+                    let q = i as f32 / 1000.0;
+                    let f = factor(curve, h, q);
+                    let want = if q >= 1.0 { 0.0 } else if q <= h { 1.0 } else { curve.eval(1.0 - (q - h) / (1.0 - h)) };
+                    worst = worst.max((f - want).abs());
+                    assert!(f <= last + 1e-6, "{curve:?} h {h}: not monotone at q {q}");
+                    last = f;
+                }
+            }
+            // Hardness 1 turns every curve into a constant inside the radius.
+            for i in 0..1000 {
+                assert_eq!(factor(curve, 1.0, i as f32 / 1000.0), 1.0);
+            }
+        }
+        // The curve is stretched over the outer part of the radius: h = 0.5 at q = 0.75 is the
+        // plain curve at q = 0.5.
+        let stretched = factor(Falloff::Smooth, 0.5, 0.75);
+        assert_eq!(stretched, factor(Falloff::Smooth, 0.0, 0.5));
+        println!("stk4 hardness: max |factor - (q-h)/(1-h) remap| {worst:.1e}; smooth h=0.5 at q=0.75 -> {stretched}");
+        assert!(worst < 1e-6);
+    }
+
+    /// Golden profiles: one Draw dab on the reference plane moves every vertex straight up by
+    /// r · DRAW_K · factor(preset, hardness, d / r), for every preset and two hardnesses.
+    #[test]
+    fn stk4_brs1_golden_profiles_on_the_reference_plane() {
+        let (c, r) = ([0.1f32, 0.05, 0.0], 0.3f32);
+        let mut report = Vec::new();
+        for curve in Falloff::ALL {
+            for h in [0.0f32, 0.5] {
+                let mut e = plane(128);
+                let before = e.mesh.positions.clone();
+                begin(&mut e, Tool::Draw);
+                e.brush.falloff = curve;
+                e.brush.hardness = h;
+                e.dab_draw(c, r, 1.0, [0.0, 0.0, 1.0]);
+                let (mut worst, mut moved) = (0.0f32, 0);
+                for v in 0..e.mesh.nverts() {
+                    let p0 = get3(&before, v);
+                    let p1 = get3(&e.mesh.positions, v);
+                    let want = r * DRAW_K * factor(curve, h, len_sq(sub(p0, c)).sqrt() / r);
+                    assert!(p1[0] == p0[0] && p1[1] == p0[1], "{curve:?}: tangential motion");
+                    worst = worst.max((p1[2] - p0[2] - want).abs());
+                    moved += (p1[2] != p0[2]) as usize;
+                }
+                let rel = worst / (r * DRAW_K);
+                assert!(rel < 1e-5, "{curve:?} h {h}: profile off by {rel} of the peak");
+                assert!(moved > 500);
+                report.push(format!("{curve:?}/h{h} {rel:.1e}"));
+            }
+        }
+        println!("stk4 golden plane profiles, max error / peak: {}", report.join(", "));
+    }
+
+    // ---------- STK-11 ----------
+
+    #[test]
+    fn stk11_area_plane_front_facing_wins() {
+        // A thin plate: the front sheet (z = 0) faces the eye, the back sheet 0.02 below faces away.
+        let front = grid(64, 0.0, true);
+        let back = grid(64, -0.02, false);
+        let off = front.nverts() as u32;
+        let mut m = front;
+        m.positions.extend_from_slice(&back.positions);
+        m.tris.extend(back.tris.iter().map(|&v| v + off));
+        m.poly_next.extend_from_slice(&back.poly_next);
+        let mut e = with_mesh(m);
+        let fallback = Plane { point: [9.0; 3], normal: [1.0, 0.0, 0.0] };
+        begin(&mut e, Tool::Flatten);
+        let p = e.sample_plane([0.0, 0.0, 0.0], 0.3, false, fallback);
+        println!("stk11 plate seen from +z: normal {:?}, point z {:.2e}", p.normal, p.point[2]);
+        assert!(p.normal[2] > 0.999_999 && p.point[2].abs() < 1e-6, "front sheet must win: {p:?}");
+        // Seen from below, the other sheet faces the eye and wins.
+        e.cam = camera([0.0, 0.0, -3.0], 800.0, 800.0);
+        let p = e.sample_plane([0.0, 0.0, -0.02], 0.3, false, fallback);
+        println!("stk11 plate seen from -z: normal {:?}, point z {:.4}", p.normal, p.point[2]);
+        assert!(p.normal[2] < -0.999_999 && (p.point[2] + 0.02).abs() < 1e-6, "back sheet must win from below: {p:?}");
+        // With nothing facing the eye, the back-facing vertices still define the plane.
+        let mut e = plane(64);
+        e.cam = camera([0.0, 0.0, -3.0], 800.0, 800.0);
+        begin(&mut e, Tool::Flatten);
+        let p = e.sample_plane([0.0, 0.0, 0.0], 0.3, false, fallback);
+        assert!(p.normal[2] > 0.999_999 && p.point[2].abs() < 1e-6, "no front-facing vertex: {p:?}");
+    }
+
+    /// Accumulate off samples the stroke-start surface: 60 Clay dabs in one place converge to the
+    /// offset plane over the original surface. Accumulate on samples the current surface, so
+    /// the same dabs keep building.
+    #[test]
+    fn stk11_brs6_accumulate_flag_switches_original_and_current_sampling() {
+        let (c, r) = ([0.0f32, 0.0, 0.0], 0.3f32);
+        let mut heights = [0.0f32; 2];
+        for (k, accumulate) in [false, true].into_iter().enumerate() {
+            let mut e = plane(128);
+            begin(&mut e, Tool::Clay);
+            e.brush.accumulate = accumulate;
+            let v = nearest(&e.mesh, c);
+            for _ in 0..60 {
+                e.dab(Tool::Clay, c, r, 1.0, [0.0, 0.0, 1.0]);
+                e.frame_update();
+            }
+            heights[k] = e.mesh.positions[3 * v + 2] / (CLAY_OFFSET * r);
+        }
+        println!("stk11 clay 60 dabs, center height / offset: accumulate off {:.6}, on {:.3}", heights[0], heights[1]);
+        assert!(heights[0] > 0.999 && heights[0] <= 1.0 + 1e-5, "off: capped at the stroke-start offset plane");
+        assert!(heights[1] > 1.5, "on: keeps building");
+    }
+
+    #[test]
+    fn stk11_autosmooth_relaxes_every_dab() {
+        let mut rms = [0.0f64; 2];
+        for (k, auto) in [0.0f32, 0.5].into_iter().enumerate() {
+            let mut e = plane(128);
+            // Deterministic noise of +-0.002 on the plane.
+            let mut seed = 99u32;
+            for v in 0..e.mesh.nverts() {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                e.mesh.positions[3 * v + 2] = (seed as f32 / u32::MAX as f32 - 0.5) * 0.004;
+            }
+            for v in 0..e.mesh.nverts() {
+                e.mesh.vertex_normal(v);
+            }
+            e.brush.tool = Tool::Draw;
+            e.brush.strength = 0.2;
+            e.brush.autosmooth = auto;
+            stroke(&mut e, &line([300.0, 400.0], [500.0, 400.0], 40));
+            // Umbrella (Laplacian) magnitude over the middle of the stroke.
+            let (mut sum, mut n) = (0.0f64, 0);
+            for v in 0..e.mesh.nverts() {
+                let p = get3(&e.mesh.positions, v);
+                if p[0].abs() > 0.2 || p[1].abs() > 0.05 {
+                    continue;
+                }
+                let nb = e.mesh.neighbors(v);
+                let avg = nb.iter().map(|&w| e.mesh.positions[3 * w as usize + 2] as f64).sum::<f64>() / nb.len() as f64;
+                sum += (avg - p[2] as f64).powi(2);
+                n += 1;
+            }
+            rms[k] = (sum / n as f64).sqrt();
+        }
+        println!("stk11 autosmooth: umbrella RMS along the stroke {:.2e} (off) -> {:.2e} (0.5), ratio {:.3}", rms[0], rms[1], rms[1] / rms[0]);
+        assert!(rms[1] < 0.5 * rms[0]);
+    }
+
+    // ---------- SYM-1 ----------
+
+    #[test]
+    fn sym1_every_axis_combination_is_mirror_exact() {
+        let base = sphere(48);
+        let maps: Vec<(u8, Vec<usize>)> = [1u8, 2, 4].iter().map(|&a| (a, partners(&base.mesh, a))).collect();
+        let base_err = mirror_error(&base.mesh, &maps);
+        let mut report = Vec::new();
+        for mask in 1u8..=7 {
+            let mut e = sphere(48);
+            e.brush.tool = Tool::Draw;
+            (e.brush.symmetry_x, e.brush.symmetry_y, e.brush.symmetry_z) = (mask & 1 != 0, mask & 2 != 0, mask & 4 != 0);
+            stroke(&mut e, &line([330.0, 380.0], [470.0, 430.0], 40));
+            let axes: Vec<(u8, Vec<usize>)> = maps.iter().filter(|(a, _)| mask & a != 0).cloned().collect();
+            let err = mirror_error(&e.mesh, &axes);
+            assert!(err < 1e-6, "mask {mask}: mirror error {err}");
+            report.push(format!("{mask:03b} {err:.1e}"));
+        }
+        println!("sym1 draw, mirror error per axis mask (base mesh {base_err:.1e}): {}", report.join(", "));
+    }
+
+    #[test]
+    fn sym1_brs1_brs2_brs3_brs4_brs5_brs6_brs7_brs8_brs9_brs10_brs11_xyz_mirror_exact_for_every_brush() {
+        let base = sphere(48);
+        let maps: Vec<(u8, Vec<usize>)> = [1u8, 2, 4].iter().map(|&a| (a, partners(&base.mesh, a))).collect();
+        let base_err = mirror_error(&base.mesh, &maps);
+        let mut report = Vec::new();
+        for tool in Tool::ALL {
+            let mut e = sphere(48);
+            e.brush.tool = tool;
+            e.brush.strength = 1.0;
+            (e.brush.symmetry_x, e.brush.symmetry_y, e.brush.symmetry_z) = (true, true, true);
+            if tool == Tool::Crease {
+                e.brush.falloff = Falloff::Sharp;
+            }
+            let before = e.mesh.position_hash();
+            stroke(&mut e, &sphere_stroke(tool));
+            assert_ne!(e.mesh.position_hash(), before, "{tool:?} changed nothing");
+            let err = mirror_error(&e.mesh, &maps);
+            assert!(err < 1e-6, "{tool:?}: XYZ mirror error {err}");
+            report.push(format!("{tool:?} {err:.1e}"));
+        }
+        println!("sym1 XYZ mirror error per brush (base mesh {base_err:.1e}): {}", report.join(", "));
+    }
+
+    /// A dab on a mirror plane overlaps its image completely: the two share the strength, so the
+    /// result equals one dab without symmetry (Blender's feather), instead of doubling.
+    #[test]
+    fn sym1_feather_never_doubles_strength() {
+        let r = 0.3f32;
+        let mut report = Vec::new();
+        for (c, mask) in [([0.0f32, 0.2, 0.0], 1u8), ([0.0, 0.0, 0.0], 3), ([0.15, 0.2, 0.0], 1), ([0.7, 0.2, 0.0], 1)] {
+            let mut lift = [0.0f32; 2];
+            for (k, m) in [0u8, mask].into_iter().enumerate() {
+                let mut e = plane(128);
+                begin(&mut e, Tool::Draw);
+                (e.brush.symmetry_x, e.brush.symmetry_y) = (m & 1 != 0, m & 2 != 0);
+                let v = nearest(&e.mesh, c);
+                e.dab_draw(c, r, 1.0, [0.0, 0.0, 1.0]);
+                lift[k] = e.mesh.positions[3 * v + 2];
+            }
+            let ratio = lift[1] / lift[0];
+            report.push(format!("c {c:?} mask {mask}: {ratio:.6}"));
+            assert!(ratio <= 1.0 + 1e-6, "strength grew at {c:?}: {ratio}");
+            if c[0] == 0.0 || c[0] >= 2.0 * r {
+                assert!((ratio - 1.0).abs() < 1e-6, "on the plane or clear of it: {ratio}");
+            }
+        }
+        println!("sym1 feather, center lift with symmetry / without: {}", report.join("; "));
+    }
+
+    // ---------- brushes ----------
+
+    #[test]
+    fn brs4_inflate_moves_along_vertex_normals_and_a_sphere_stays_round() {
+        // One constant dab (hardness 1) covering the whole sphere: every vertex moves along its
+        // own normal by the same amount, so the sphere grows and stays round.
+        let mut e = sphere(48);
+        begin(&mut e, Tool::Inflate);
+        e.brush.hardness = 1.0;
+        let (c, r) = ([0.0f32; 3], 3.0f32);
+        let p0 = e.mesh.positions.clone();
+        let n0: Vec<f32> = (0..e.mesh.nverts()).flat_map(|v| poly_normal(&e.mesh, &|u: usize| get3(&p0, u), v)).collect();
+        e.dab(Tool::Inflate, c, r, 1.0, [0.0, 0.0, 1.0]);
+        let mut worst_dir = 0.0f32;
+        for v in 0..e.mesh.nverts() {
+            let d = sub(get3(&e.mesh.positions, v), get3(&p0, v));
+            worst_dir = worst_dir.max(1.0 - dot(normalize(d), get3(&n0, v)));
+        }
+        for _ in 0..9 {
+            e.frame_update();
+            e.dab(Tool::Inflate, c, r, 1.0, [0.0, 0.0, 1.0]);
+        }
+        let radii: Vec<f64> = (0..e.mesh.nverts()).map(|v| len_sq(get3(&e.mesh.positions, v)).sqrt() as f64).collect();
+        let mean = radii.iter().sum::<f64>() / radii.len() as f64;
+        let sigma = (radii.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / radii.len() as f64).sqrt();
+        println!("brs4 inflate: 1 - cos(motion, vertex normal) max {worst_dir:.1e}; after 10 dabs radius {mean:.4} (expected {:.4}), sigma/mean {:.2e}", 1.0 + 10.0 * r * INFLATE_K, sigma / mean);
+        assert!(worst_dir < 1e-6);
+        assert!(sigma / mean < 0.01, "radial sigma {:.3}%", 100.0 * sigma / mean);
+        assert!((mean - (1.0 + 10.0 * r as f64 * INFLATE_K as f64)).abs() < 0.01);
+    }
+
+    #[test]
+    fn brs4_inflate_golden_profile_on_the_reference_plane() {
+        let mut e = plane(128);
+        let before = e.mesh.positions.clone();
+        begin(&mut e, Tool::Inflate);
+        let (c, r) = ([-0.2f32, 0.1, 0.0], 0.3f32);
+        e.dab(Tool::Inflate, c, r, 1.0, [0.0, 0.0, 1.0]);
+        let mut worst = 0.0f32;
+        for v in 0..e.mesh.nverts() {
+            let p0 = get3(&before, v);
+            let want = r * INFLATE_K * factor(Falloff::Smooth, 0.0, len_sq(sub(p0, c)).sqrt() / r);
+            worst = worst.max((e.mesh.positions[3 * v + 2] - p0[2] - want).abs());
+        }
+        println!("brs4 inflate plane profile: max error / peak {:.1e}", worst / (r * INFLATE_K));
+        assert!(worst / (r * INFLATE_K) < 1e-5);
+    }
+
+    #[test]
+    fn brs5_flatten_converges_to_the_area_plane() {
+        // The cap of a sphere under the brush flattens onto its area plane.
+        let mut e = sphere(64);
+        begin(&mut e, Tool::Flatten);
+        let (c, r) = ([0.0f32, 0.0, 1.0], 0.4f32);
+        let fallback = Plane { point: c, normal: [0.0, 0.0, 1.0] };
+        let spread = |e: &mut Engine| -> f32 {
+            let pl = e.sample_plane(c, r, false, fallback);
+            let mut worst = 0.0f32;
+            for i in 0..e.sel_v.len() {
+                if e.sel_d2[i] < (0.5 * r) * (0.5 * r) {
+                    worst = worst.max(dot(sub(get3(&e.sel_p, i), pl.point), pl.normal).abs());
+                }
+            }
+            worst
+        };
+        let h0 = spread(&mut e);
+        let mut trace = Vec::new();
+        for k in 1..=40 {
+            e.dab(Tool::Flatten, c, r, 1.0, [0.0, 0.0, 1.0]);
+            e.frame_update();
+            if k % 10 == 0 {
+                trace.push(spread(&mut e));
+            }
+        }
+        let t: Vec<String> = trace.iter().map(|x| format!("{x:.2e}")).collect();
+        println!("brs5 flatten: max |distance to area plane| within r/2: {h0:.2e} -> {} after 10/20/30/40 dabs", t.join(" "));
+        assert!(trace[3] < 0.01 * h0);
+        // A flat surface is already on its plane: nothing moves.
+        let mut e = plane(128);
+        let h = e.mesh.position_hash();
+        begin(&mut e, Tool::Flatten);
+        e.dab(Tool::Flatten, [0.1, 0.0, 0.0], 0.3, 1.0, [0.0, 0.0, 1.0]);
+        assert_eq!(e.mesh.position_hash(), h);
+    }
+
+    #[test]
+    fn brs6_clay_builds_toward_the_offset_plane() {
+        let mut e = plane(128);
+        let before = e.mesh.positions.clone();
+        begin(&mut e, Tool::Clay);
+        let (c, r) = ([0.05f32, -0.1, 0.0], 0.3f32);
+        e.dab(Tool::Clay, c, r, 1.0, [0.0, 0.0, 1.0]);
+        // One dab on a plane: each vertex closes CLAY_K of its gap to the plane CLAY_OFFSET·r up.
+        let mut worst = 0.0f32;
+        for v in 0..e.mesh.nverts() {
+            let p0 = get3(&before, v);
+            let want = CLAY_OFFSET * r * CLAY_K * factor(Falloff::Smooth, 0.0, len_sq(sub(p0, c)).sqrt() / r);
+            worst = worst.max((e.mesh.positions[3 * v + 2] - p0[2] - want).abs());
+        }
+        let peak = CLAY_OFFSET * r * CLAY_K;
+        // Accumulating dabs build up past the first offset plane.
+        let v = nearest(&e.mesh, c);
+        let mut h = vec![e.mesh.positions[3 * v + 2] / (CLAY_OFFSET * r)];
+        for _ in 0..30 {
+            e.frame_update();
+            e.dab(Tool::Clay, c, r, 1.0, [0.0, 0.0, 1.0]);
+            h.push(e.mesh.positions[3 * v + 2] / (CLAY_OFFSET * r));
+        }
+        println!("brs6 clay: one-dab profile error / peak {:.1e}; center height / offset after 1, 10, 20, 31 dabs: {:.3} {:.3} {:.3} {:.3}", worst / peak, h[0], h[9], h[19], h[30]);
+        assert!(worst / peak < 1e-5);
+        assert!(h.windows(2).all(|w| w[1] > w[0]), "clay must keep building");
+        assert!(h[30] > 1.0);
+    }
+
+    #[test]
+    fn brs6_clay_strips_square_tangent_falloff() {
+        let mut e = plane(128);
+        let before = e.mesh.positions.clone();
+        begin(&mut e, Tool::ClayStrips);
+        let g = 1.0 / 64.0; // grid spacing
+        let (c, r) = ([0.0f32, 0.0, 0.0], 20.0 * g);
+        // The first dab only records where the strip starts; the second runs along +x.
+        e.dab(Tool::ClayStrips, [-0.5 * g, 0.0, 0.0], r, 1.0, [0.0, 0.0, 1.0]);
+        assert_eq!(e.mesh.positions, before, "first dab has no direction yet");
+        e.dab(Tool::ClayStrips, c, r, 1.0, [0.0, 0.0, 1.0]);
+        let lift = |e: &Engine, x: f32, y: f32| {
+            let v = nearest(&e.mesh, [x * g, y * g, 0.0]);
+            e.mesh.positions[3 * v + 2]
+        };
+        let (edge, diag, corner, outside) = (lift(&e, 12.0, 0.0), lift(&e, 12.0, 12.0), lift(&e, 17.0, 17.0), lift(&e, 21.0, 0.0));
+        // Golden: every vertex rises STRIPS_OFFSET·r × factor(Chebyshev distance) × z-window.
+        let u = -STRIPS_OFFSET / STRIPS_DEPTH;
+        let wz = 1.0 - u * u;
+        let mut worst = 0.0f32;
+        for v in 0..e.mesh.nverts() {
+            let p0 = get3(&before, v);
+            let dq = p0[0].abs().max(p0[1].abs()) / r;
+            let want = STRIPS_OFFSET * r * factor(Falloff::Smooth, 0.0, dq) * wz;
+            worst = worst.max((e.mesh.positions[3 * v + 2] - want).abs());
+        }
+        println!(
+            "brs6 clay strips: lift at (0.6r,0) {edge:.5}, (0.6r,0.6r) {diag:.5} (ratio {:.6}), corner (0.85r,0.85r) {corner:.5}, (1.05r,0) {outside}; profile error / peak {:.1e}",
+            diag / edge,
+            worst / (STRIPS_OFFSET * r)
+        );
+        assert_eq!(edge, diag, "equal Chebyshev distance, equal lift: the footprint is square");
+        assert!(corner > 0.0, "the square's corner lies outside the round radius and still moves");
+        assert_eq!(outside, 0.0);
+        assert!(worst / (STRIPS_OFFSET * r) < 1e-5);
+        // One-sided: a vertex already above the target plane is never shaved down.
+        let mut e = plane(128);
+        let v = nearest(&e.mesh, [0.0, 0.0, 0.0]);
+        e.mesh.positions[3 * v + 2] = 0.5 * r;
+        begin(&mut e, Tool::ClayStrips);
+        e.dab(Tool::ClayStrips, [-0.5 * g, 0.0, 0.0], r, 1.0, [0.0, 0.0, 1.0]);
+        e.dab(Tool::ClayStrips, c, r, 1.0, [0.0, 0.0, 1.0]);
+        assert_eq!(e.mesh.positions[3 * v + 2], 0.5 * r);
+    }
+
+    #[test]
+    fn brs7_crease_v_profile_and_pinch_to_the_line() {
+        let mut out = Vec::new();
+        for tool in [Tool::Crease, Tool::Draw] {
+            let mut e = plane(256);
+            let before = e.mesh.positions.clone();
+            e.brush.tool = tool;
+            e.brush.strength = 1.0;
+            e.brush.radius_px = 40.0;
+            e.brush.falloff = if tool == Tool::Crease { Falloff::Sharp } else { Falloff::Smooth };
+            stroke(&mut e, &line([250.0, 400.0], [550.0, 400.0], 60));
+            let r = e.last_dab[6];
+            // Cross-section across the stroke at x = 0: the vertices of that grid column, which
+            // the line pull moves sideways (rows: original y, dz, dy, dx).
+            let mut rows: Vec<(f32, f32, f32, f32)> = Vec::new();
+            for v in 0..e.mesh.nverts() {
+                let p0 = get3(&before, v);
+                if p0[0] == 0.0 && p0[1].abs() < 1.2 * r {
+                    let p = get3(&e.mesh.positions, v);
+                    rows.push((p0[1], p[2] - p0[2], p[1] - p0[1], p[0] - p0[0]));
+                }
+            }
+            // The profile is the surface where it ended up: depth against final y.
+            let mut prof: Vec<(f32, f32)> = rows.iter().map(|w| (w.0 + w.2, w.1)).collect();
+            prof.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let at = |y: f32| {
+                let i = prof.windows(2).position(|w| w[0].0 <= y && y <= w[1].0).unwrap();
+                let (a, b) = (prof[i], prof[i + 1]);
+                a.1 + (b.1 - a.1) * (y - a.0) / (b.0 - a.0)
+            };
+            let depth = at(0.0);
+            let v_ratio = 0.5 * (at(0.15 * r) + at(-0.15 * r)) / depth;
+            let inward = rows.iter().filter(|w| w.0.abs() > 0.05 * r && w.0.abs() < 0.8 * r).all(|w| w.2 * w.0 < 0.0);
+            let max_dx = rows.iter().map(|w| w.3.abs()).fold(0.0f32, f32::max);
+            out.push((tool, depth / r, v_ratio, inward, max_dx / r));
+        }
+        let (crease, draw) = (out[0], out[1]);
+        println!(
+            "brs7 crease: center depth {:.4} r; depth at 0.15 r / center {:.3} (draw's U-profile {:.3}); rows pulled toward the line: {}; max motion along the stroke {:.1e} r",
+            -crease.1, crease.2, draw.2, crease.3, crease.4
+        );
+        assert!(crease.1 < 0.0, "crease cuts in");
+        assert!(crease.2 < 0.8 && draw.2 > 0.9, "V vs U profile");
+        assert!(crease.3, "both sides pinch toward the line");
+        assert!(crease.4 < 1e-4);
+    }
+
+    #[test]
+    fn brs8_pinch_moves_nothing_along_the_normal_of_a_plane() {
+        let mut e = plane(128);
+        let before = e.mesh.positions.clone();
+        e.brush.tool = Tool::Pinch;
+        e.brush.strength = 1.0;
+        stroke(&mut e, &line([320.0, 380.0], [480.0, 420.0], 40));
+        let (mut max_dz, mut moved, mut max_dxy) = (0.0f32, 0, 0.0f32);
+        for v in 0..e.mesh.nverts() {
+            let d = sub(get3(&e.mesh.positions, v), get3(&before, v));
+            max_dz = max_dz.max(d[2].abs());
+            max_dxy = max_dxy.max((d[0] * d[0] + d[1] * d[1]).sqrt());
+            moved += (d != [0.0; 3]) as usize;
+        }
+        // Stationary dabs pull inward without overshooting the center.
+        let mut e = plane(128);
+        begin(&mut e, Tool::Pinch);
+        let c = [0.1f32, 0.1, 0.0];
+        let p0 = e.mesh.positions.clone();
+        for _ in 0..5 {
+            e.dab(Tool::Pinch, c, 0.3, 1.0, [0.0, 0.0, 1.0]);
+        }
+        let mut ok = true;
+        for v in 0..e.mesh.nverts() {
+            let (a, b) = (get3(&p0, v), get3(&e.mesh.positions, v));
+            if a != b {
+                ok &= len_sq(sub(c, b)) < len_sq(sub(c, a)) && dot(sub(c, b), sub(c, a)) > 0.0;
+            }
+        }
+        println!("brs8 pinch stroke: {moved} vertices moved up to {max_dxy:.4} in-plane, max |normal motion| {max_dz:e}; stationary dabs inward without overshoot: {ok}");
+        assert!(moved > 100 && max_dxy > 1e-3);
+        assert_eq!(max_dz, 0.0);
+        assert!(ok);
+    }
+
+    #[test]
+    fn brs9_snake_hook_follows_the_path() {
+        let mut e = sphere(64);
+        e.brush.tool = Tool::SnakeHook;
+        e.brush.strength = 1.0;
+        e.brush.radius_px = 60.0;
+        e.brush.pressure_strength = false;
+        let hit = e.raycast_screen(400.0, 400.0).unwrap();
+        let tip = nearest(&e.mesh, hit.point);
+        let start = get3(&e.mesh.positions, tip);
+        let mut path = line([400.0, 400.0], [550.0, 400.0], 30);
+        path.extend(line([550.0, 400.0], [550.0, 250.0], 30).into_iter().skip(1));
+        assert!(stroke(&mut e, &path) > 0);
+        let end = [e.last_dab[0], e.last_dab[1], e.last_dab[2]];
+        let r = e.last_dab[6];
+        let p = get3(&e.mesh.positions, tip);
+        let lag = len_sq(sub(p, end)).sqrt();
+        let travel = len_sq(sub(p, start)).sqrt();
+        let finite = e.mesh.positions.iter().all(|x| x.is_finite());
+        let min_area = tri_areas(&e.mesh).into_iter().fold(f32::INFINITY, f32::min);
+        println!("brs9 snake hook: tip travelled {travel:.3} along an L-shaped path, ends {lag:.2e} ({:.2}% of r) from the pencil; min triangle area {min_area:.2e}", 100.0 * lag / r);
+        assert!(travel > 0.4);
+        assert!(lag < 0.05 * r);
+        assert!(finite && min_area > 0.0);
+    }
+
+    #[test]
+    fn brs10_layer_height_capped_regardless_of_dab_count() {
+        let mut report = Vec::new();
+        for (passes, sym) in [(1usize, false), (10, false), (40, false), (40, true)] {
+            let mut e = plane(128);
+            e.brush.tool = Tool::Layer;
+            e.brush.strength = 1.0;
+            e.brush.symmetry_x = sym;
+            let mut path = Vec::new();
+            for k in 0..passes {
+                let (a, b) = if k % 2 == 0 { ([300.0, 400.0], [500.0, 400.0]) } else { ([500.0, 400.0], [300.0, 400.0]) };
+                path.extend(line(a, b, 40));
+            }
+            // The cap is set by the first dab's radius (later dabs hit the raised layer, nearer
+            // the eye, so their world radius is smaller).
+            let first = e.raycast_screen(path[0][0], path[0][1]).unwrap();
+            let h = LAYER_HEIGHT * e.cam.world_radius(e.radius_px_at(1.0), first.point);
+            stroke(&mut e, &path);
+            let top = e.mesh.positions.chunks(3).map(|p| p[2]).fold(f32::MIN, f32::max);
+            let center = e.mesh.positions[3 * nearest(&e.mesh, [0.0, 0.0, 0.0]) + 2];
+            report.push(format!("{passes} passes{}: max {:.6} H, center {:.4} H", if sym { " +X" } else { "" }, top / h, center / h));
+            assert!(top <= h * (1.0 + 1e-5), "layer exceeded its height: {}", top / h);
+            assert!(center > 0.99 * h || passes == 1);
+        }
+        println!("brs10 layer: {}", report.join("; "));
+    }
+
+    #[test]
+    fn brs11_brs5_fill_scrape_planar_one_plane_primitive_with_one_sided_limits() {
+        // A plane with bumps and dents: z = A sin(6x) sin(6y).
+        let bumpy = || {
+            let mut e = plane(128);
+            for v in 0..e.mesh.nverts() {
+                let p = get3(&e.mesh.positions, v);
+                e.mesh.positions[3 * v + 2] = 0.02 * (6.0 * p[0]).sin() * (6.0 * p[1]).sin();
+            }
+            for v in 0..e.mesh.nverts() {
+                e.mesh.vertex_normal(v);
+            }
+            e
+        };
+        let (c, r) = ([0.05f32, 0.02, 0.0], 0.4f32);
+        let fallback = Plane { point: c, normal: [0.0, 0.0, 1.0] };
+        let mut report = Vec::new();
+        for tool in [Tool::Fill, Tool::Scrape, Tool::Flatten] {
+            let mut e = bumpy();
+            begin(&mut e, tool);
+            let pl = e.sample_plane(c, r, false, fallback);
+            let before = e.mesh.positions.clone();
+            e.dab(tool, c, r, 1.0, [0.0, 0.0, 1.0]);
+            let (mut up, mut down, mut wrong) = (0, 0, 0);
+            for v in 0..e.mesh.nverts() {
+                let (a, b) = (get3(&before, v), get3(&e.mesh.positions, v));
+                let h0 = dot(sub(a, pl.point), pl.normal);
+                let h1 = dot(sub(b, pl.point), pl.normal);
+                if a == b {
+                    continue;
+                }
+                if h1 > h0 { up += 1 } else { down += 1 }
+                // Never past the plane, never on the excluded side.
+                let excluded = match tool {
+                    Tool::Fill => h0 > 0.0,
+                    Tool::Scrape => h0 < 0.0,
+                    _ => false,
+                };
+                if excluded || h1.abs() > h0.abs() + 1e-7 || h1 * h0 < 0.0 {
+                    wrong += 1;
+                }
+            }
+            report.push(format!("{tool:?}: {up} up, {down} down, {wrong} wrong"));
+            assert_eq!(wrong, 0, "{tool:?}");
+            match tool {
+                Tool::Fill => assert!(up > 100 && down == 0),
+                Tool::Scrape => assert!(down > 100 && up == 0),
+                _ => assert!(up > 100 && down > 100),
+            }
+        }
+        // Planar holds the first dab's plane for the whole stroke; Flatten re-samples per dab.
+        let mut e = bumpy();
+        begin(&mut e, Tool::Planar);
+        let first = e.sample_plane(c, r, false, fallback);
+        let path: Vec<[f32; 3]> = (0..40).map(|k| [c[0] + 0.004 * k as f32, c[1], 0.0]).collect();
+        for p in &path {
+            e.dab(Tool::Planar, *p, r, 1.0, [0.0, 0.0, 1.0]);
+            e.frame_update();
+        }
+        let held = e.stroke.brush.plane.unwrap();
+        let mut off = 0.0f32;
+        for v in 0..e.mesh.nverts() {
+            let p = get3(&e.mesh.positions, v);
+            if len_sq(sub(p, path[39])) < (0.3 * r) * (0.3 * r) {
+                off = off.max(dot(sub(p, first.point), first.normal).abs());
+            }
+        }
+        report.push(format!("Planar: held plane == first-dab plane {}, max distance to it near the end {off:.1e}", held == first));
+        println!("brs11 plane primitive: {}", report.join("; "));
+        assert_eq!(held, first);
+        assert!(off < 1e-3 * 0.02);
+    }
+
+    // ---------- gates shared by every brush ----------
+
+    #[test]
+    fn brs1_brs2_brs3_brs4_brs5_brs6_brs7_brs8_brs9_brs10_brs11_no_nan_or_degenerate_triangles() {
+        let mut report = Vec::new();
+        for tool in Tool::ALL {
+            let mut e = sphere(48);
+            let a0 = tri_areas(&e.mesh);
+            e.brush.tool = tool;
+            e.brush.strength = 1.0;
+            e.brush.symmetry_x = true;
+            if tool == Tool::Crease {
+                e.brush.falloff = Falloff::Sharp;
+            }
+            // Three overlapping strokes, the last one zig-zagging.
+            for k in 0..2 {
+                stroke(&mut e, &sphere_stroke(tool).iter().map(|p| [p[0], p[1] + 10.0 * k as f32]).collect::<Vec<_>>());
+            }
+            let zig: Vec<[f32; 2]> = (0..60).map(|i| [340.0 + 2.0 * i as f32, 400.0 + if i % 2 == 0 { 15.0 } else { -15.0 }]).collect();
+            if !matches!(tool, Tool::Grab | Tool::SnakeHook) {
+                stroke(&mut e, &zig);
+            }
+            assert!(e.mesh.positions.iter().all(|x| x.is_finite()) && e.mesh.normals.iter().all(|x| x.is_finite()), "{tool:?}: NaN");
+            let min_ratio = tri_areas(&e.mesh).iter().zip(&a0).map(|(a, b)| a / b).fold(f32::INFINITY, f32::min);
+            report.push(format!("{tool:?} {min_ratio:.1e}"));
+            // Degenerate = collapsed to rounding level. Heavy pinching legitimately thins
+            // triangles on a fixed topology (dynamic topology, TOP-3, re-tessellates them).
+            assert!(min_ratio > 1e-6, "{tool:?}: a triangle collapsed to {min_ratio} of its area");
+        }
+        println!("brush gate, smallest triangle area / original after two strokes and a 360-dab zig-zag at full strength: {}", report.join(", "));
+    }
+
+    #[test]
+    fn und1_prj3_brs4_brs5_brs6_brs7_brs8_brs9_brs10_brs11_every_brush_undoes_and_replays_exactly() {
+        use crate::history::apply_record;
+        for tool in Tool::ALL {
+            let mut e = sphere(40);
+            e.brush.tool = tool;
+            e.brush.strength = 1.0;
+            let start = e.mesh.positions.clone();
+            let h0 = e.mesh.position_hash();
+            assert!(stroke(&mut e, &sphere_stroke(tool)) > 0, "{tool:?}: no journal record");
+            let record = e.out.clone();
+            let h1 = e.mesh.position_hash();
+            assert_ne!(h0, h1);
+            assert!(e.undo() > 0);
+            assert_eq!(e.mesh.position_hash(), h0, "{tool:?}: undo");
+            assert!(e.redo() > 0);
+            assert_eq!(e.mesh.position_hash(), h1, "{tool:?}: redo");
+            e.mesh.positions.copy_from_slice(&start);
+            apply_record(&mut e.mesh, &record).unwrap();
+            assert_eq!(e.mesh.position_hash(), h1, "{tool:?}: journal replay");
+        }
+    }
+
+    /// Native ms per dab on the reference mesh size (1M vertices), 200 dabs per brush:
+    /// `cargo test --release -- --ignored --nocapture bench_brushes`.
+    #[test]
+    #[ignore]
+    fn bench_brushes() {
+        let t0 = std::time::Instant::now();
+        let mesh = EditMesh::from_trimesh(cube_sphere(408), 1024);
+        let mut e = Engine::new(mesh);
+        e.cam = camera(EYE, 1600.0, 1600.0);
+        println!("bench: {} verts, {} tris, {} leaves, setup {:?}", e.mesh.nverts(), e.mesh.ntris(), e.mesh.nleaves(), t0.elapsed());
+        let r = 0.1f32;
+        let mut rows = Vec::new();
+        for sym in [false, true] {
+            for tool in Tool::ALL {
+                e.brush.symmetry_x = sym;
+                e.brush.radius_px = 50.0;
+                e.brush.strength = 0.5;
+                let (ms, dabs, sel) = match tool {
+                    Tool::Grab | Tool::SnakeHook => {
+                        e.brush.tool = tool;
+                        let t = std::time::Instant::now();
+                        e.stroke_begin(800.0, 800.0, 1.0);
+                        let mut n = 0;
+                        for k in 0..200 {
+                            let a = k as f32 * 0.05;
+                            n += e.stroke_move(&[800.0 + 120.0 * a.cos(), 800.0 + 120.0 * a.sin(), 1.0]).max(1);
+                        }
+                        e.stroke_end();
+                        (t.elapsed().as_secs_f64() * 1000.0, n, e.slots.verts.len())
+                    }
+                    _ => {
+                        begin(&mut e, tool);
+                        let t = std::time::Instant::now();
+                        for k in 0..200 {
+                            let a = k as f32 * 0.03;
+                            let c = normalize([0.3 * a.cos(), 0.3 * a.sin(), 1.0]);
+                            e.dab(tool, c, r, 0.5, c);
+                        }
+                        let ms = t.elapsed().as_secs_f64() * 1000.0;
+                        e.stroke_end();
+                        (ms, 200, e.slots.verts.len())
+                    }
+                };
+                e.frame_update();
+                rows.push(format!("{tool:?}{} {:.3} ms/dab ({sel} verts)", if sym { "+X" } else { "" }, ms / dabs as f64));
+            }
+        }
+        println!("bench_brushes native (r = 0.1 on the unit sphere):\n  {}", rows.join("\n  "));
     }
 }
