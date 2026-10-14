@@ -10,7 +10,7 @@ import { bus } from './bus';
 import { InputController } from './input';
 import { registerServiceWorker } from './sw-client';
 import { call, connectLibrary, onEngineMessage, openProject, refreshProjects, watchStorage } from './projects';
-import { loadPrefs, onProjectOpened, prefs, savePrefsNow, setPref } from './prefs';
+import { holdPresets, loadPrefs, onProjectOpened, prefs, savePrefsNow, setPref } from './prefs';
 import type { FromEngine, ToEngine } from './shared/protocol';
 
 
@@ -78,6 +78,7 @@ function restartEngine(error: string): void {
 
 function onEngine(m: FromEngine): void {
   onEngineMessage(m); // projects / storage / disk state (P1b)
+  if (m.type === 'ready') holdPresets(); // its restored brush is not a preset change (prefs.ts)
   switch (m.type) {
     case 'project':
       if (m.error) ui.notice.value = { level: 'warn', text: m.error };

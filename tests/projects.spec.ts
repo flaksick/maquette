@@ -18,9 +18,10 @@ interface Info {
   current: boolean;
 }
 
-async function launch(): Promise<{ ctx: BrowserContext; page: Page; done: () => Promise<void>; errors: string[] }> {
+async function launch(init?: { script: (arg: string) => void; arg: string }): Promise<{ ctx: BrowserContext; page: Page; done: () => Promise<void>; errors: string[] }> {
   const profile = mkdtempSync(join(tmpdir(), 'maquette-prj-'));
   const ctx = await webkit.launchPersistentContext(profile, { viewport: { width: 1180, height: 820 }, acceptDownloads: true });
+  if (init) await ctx.addInitScript(init.script, init.arg);
   const page = await ctx.newPage();
   page.setDefaultTimeout(15_000);
   const errors: string[] = [];
@@ -404,6 +405,172 @@ test('PRJ-6: back up all is one zip of every project; the gallery shows days sin
   } finally {
     r.pageErrors = errors;
     save('prj6-backup', r);
+    await done();
+  }
+  expect(errors).toEqual([]);
+});
+
+test('NAV-10 PRJ-11 PLT-4: gesture card once, preferences file (localStorage migrated), storage numbers', async () => {
+  // P1a's localStorage preference, seeded once for this run; persist() calls counted.
+  const { page, done, errors } = await launch({
+    arg: String(Date.now()),
+    script: (token: string) => {
+      if (localStorage.getItem('maquette-test-seed') !== token) {
+        localStorage.setItem('maquette-auto-update', 'off');
+        localStorage.setItem('maquette-test-seed', token);
+      }
+      const proto = Object.getPrototypeOf(navigator.storage) as { persist?: () => Promise<boolean> };
+      const orig = proto.persist;
+      (window as any).__persistCalls = 0;
+      if (orig)
+        proto.persist = function (this: StorageManager) {
+          (window as any).__persistCalls += 1;
+          return orig.call(this);
+        };
+    },
+  });
+  const r: Record<string, unknown> = {};
+  const prefs = () => page.evaluate(() => (window as any).__maquette.library.prefs());
+  try {
+    // PRJ-11 migration: the P1a value moved into the file; the localStorage copy is gone.
+    await expect.poll(async () => (await prefs()).autoUpdate).toBe(false);
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('maquette-auto-update'))).toBe(null);
+    r.migratedAutoUpdate = false;
+
+    // NAV-10: first run shows the card; dismissed, it stays away across a relaunch.
+    r.cardOnFirstRun = await page.locator('.gesture-card').count();
+    await page.getByRole('button', { name: 'Got it' }).click();
+    r.cardAfterDismiss = await page.locator('.gesture-card').count();
+
+    // Preferences changed in the UI, then a stroke (the first save asks for persistence).
+    await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByLabel(/Finger sculpts/).check();
+    await page.getByLabel(/Check for updates automatically/).check();
+    await page.getByRole('button', { name: 'Close' }).click();
+    await page.evaluate(() => (window as any).__maquette.ui.setRadius(77));
+    await page.evaluate(() => (window as any).__maquette.library.savePrefsNow());
+    await strokeSaved(page);
+    // The page asks at the first save (workers can't: StorageManager.persist is window-only).
+    r.persistApi = await page.evaluate(() => typeof navigator.storage.persist);
+    if (r.persistApi === 'function') await expect.poll(() => page.evaluate(() => (window as any).__persistCalls)).toBeGreaterThanOrEqual(1);
+    r.persistCalls = await page.evaluate(() => (window as any).__persistCalls);
+
+    // PLT-4: usage, quota and the persistence answer in Settings.
+    await page.getByRole('button', { name: 'Settings' }).click();
+    const storage = await page.locator('[data-storage]').getAttribute('data-storage');
+    const [usage, quota, persisted] = storage!.split('/');
+    r.storage = { usage: Number(usage), quota: Number(quota), persisted: persisted === 'true', text: await page.locator('[data-storage]').textContent() };
+    expect(Number(usage)).toBeGreaterThan(0);
+    expect(Number(quota)).toBeGreaterThan(Number(usage));
+
+    // NAV-10 re-open from Settings.
+    await page.getByRole('button', { name: 'Gestures…' }).click();
+    r.cardReopened = await page.locator('.gesture-card').count();
+    await page.getByRole('button', { name: 'Got it' }).click();
+
+    // Relaunch: preferences come back from the file; the card does not.
+    await page.reload();
+    await ready(page);
+    await expect.poll(() => page.evaluate(() => (window as any).__maquette.ui.tools.value.draw.radius)).toBe(77);
+    const after = await prefs();
+    r.afterRelaunch = { fingerSculpts: after.fingerSculpts, autoUpdate: after.autoUpdate, drawRadius: after.tools.draw.radius, card: await page.locator('.gesture-card').count() };
+    // A new project starts from the presets too (they survive projects).
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    await page.getByRole('button', { name: 'New sphere…' }).click();
+    await page.getByRole('button', { name: 'Create' }).click();
+    await expect.poll(async () => (await list(page)).length).toBe(2);
+    await expect.poll(() => page.evaluate(() => (window as any).__maquette.ui.tools.value.draw.radius)).toBe(77);
+    r.newProjectDrawRadius = 77;
+    // The file itself: sealed, alternating slots.
+    r.prefsFile = await page.evaluate(async () => {
+      const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('app-dev');
+      const gens: number[] = [];
+      for (const n of ['prefs-a.json', 'prefs-b.json']) {
+        try {
+          gens.push(JSON.parse(await (await (await dir.getFileHandle(n)).getFile()).text()).gen);
+        } catch {}
+      }
+      return { slots: gens.length, newestGen: Math.max(...gens) };
+    });
+    expect(r).toMatchObject({ cardOnFirstRun: 1, cardAfterDismiss: 0, cardReopened: 1, afterRelaunch: { fingerSculpts: true, autoUpdate: true, drawRadius: 77, card: 0 } });
+  } finally {
+    r.pageErrors = errors;
+    save('prj11-plt4-nav10', r);
+    await done();
+  }
+  expect(errors).toEqual([]);
+});
+
+test('PLT-11: low space blocks growth with a banner; a full disk pauses sculpting and loses nothing', async () => {
+  const { page, done, errors } = await launch();
+  const r: Record<string, unknown> = {};
+  const disk = (allowance: number | null, reportedFree?: number) => lib(page, { op: 'debug-disk', allowance, reportedFree: reportedFree ?? null });
+  try {
+    const id = await currentId(page);
+    await strokeSaved(page);
+
+    // Low: 50 MB left (reserve 200 MB). New projects, duplicates and imports are refused.
+    await disk(50 * 2 ** 20);
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    await expect(page.locator('[data-banner="disk"]')).toContainText('almost full');
+    r.newSphereButtonDisabled = await page.getByRole('button', { name: 'New sphere…' }).isDisabled();
+    await page.getByRole('button', { name: 'Close' }).click();
+    await page.evaluate(() => (window as any).__maquette.send({ type: 'new-sphere', n: 32 }));
+    await expect(page.locator('.notice')).toContainText('Not enough storage for a new project');
+    const dup = await lib(page, { op: 'duplicate', projectId: id }).then(() => 'ok', (e) => String(e));
+    r.lowSpace = { projects: (await list(page)).length, duplicate: dup.slice(0, 60) };
+    expect((await list(page)).length).toBe(1);
+
+    // Full while the estimate still claims 10 GB (as a real full disk can): the stroke's record
+    // is refused, sculpting pauses, nothing is lost.
+    await disk(0, 10 * 2 ** 30);
+    const before = (await q(page)).stats;
+    const box = (await page.locator('#scene').boundingBox())!;
+    const strokeAt = async (dx: number) => {
+      await page.mouse.move(box.x + box.width / 2 - 60 + dx, box.y + box.height / 2);
+      await page.mouse.down();
+      for (let i = 0; i <= 12; i++) await page.mouse.move(box.x + box.width / 2 - 60 + dx + i * 10, box.y + box.height / 2 + i * 2);
+      await page.mouse.up();
+    };
+    await strokeAt(0);
+    await expect(page.locator('[data-banner="disk"]')).toContainText('Storage is full: 1 change not saved yet');
+    const during = (await q(page)).stats;
+    const hFull = (await q(page)).hash;
+    await strokeAt(50); // refused: the mesh must not change
+    await expect(page.locator('.notice')).toContainText('Storage is full');
+    r.full = { seq: during.seq, lastAcked: during.lastAcked, seqBefore: before.seq, hashUnchangedAfterRefusedStroke: (await q(page)).hash === hFull };
+    expect(during.seq).toBe(before.seq + 1);
+    expect(during.lastAcked).toBeLessThan(during.seq);
+    expect((await q(page)).hash).toBe(hFull);
+
+    // An import that runs out of space midway leaves no half-written project.
+    await disk(1 * 2 ** 20, 10 * 2 ** 30);
+    const imp = await page.evaluate(async (pid) => {
+      const lib = (window as any).__maquette.library;
+      const exp = await lib.call({ op: 'export', projectId: pid });
+      return lib.call({ op: 'import', file: exp.file }).then(() => 'imported', (e: any) => `${e.code}: ${e.message}`);
+    }, id);
+    const folders = await lib<{ total: number; withManifest: number }>(page, { op: 'debug-folders' });
+    r.importWhileFull = { result: imp.slice(0, 80), folders };
+    expect(imp).toMatch(/^quota/);
+    expect(folders).toEqual({ total: 1, withManifest: 1 });
+
+    // Space freed: Try again saves the refused record; a relaunch reopens the same mesh.
+    await disk(null);
+    await page.getByRole('button', { name: 'Try again' }).click();
+    await expect.poll(async () => {
+      const s = (await q(page)).stats;
+      return s.lastAcked >= s.seq;
+    }).toBe(true);
+    await expect(page.locator('[data-banner="disk"]')).toHaveCount(0);
+    await page.reload();
+    await ready(page);
+    r.hashAfterRelaunchMatches = (await q(page)).hash === hFull;
+    expect((await q(page)).hash).toBe(hFull);
+  } finally {
+    await disk(null).catch(() => {});
+    r.pageErrors = errors;
+    save('plt11-disk', r);
     await done();
   }
   expect(errors).toEqual([]);
