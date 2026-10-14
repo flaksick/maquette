@@ -1155,14 +1155,22 @@ impl Job {
                 let p = get3(&self.vpos, v);
                 if relax {
                     let (s, e) = (self.adj_off[v] as usize, self.adj_off[v + 1] as usize);
+                    let n = get3(&self.vnrm, v);
                     let mut avg = [0.0f32; 3];
+                    // Relax smooth regions only: where the source normals around the vertex
+                    // disagree (an edge or corner), relaxing would widen the voxel chamfer.
+                    let mut smooth = true;
                     for &w in &self.adj[s..e] {
                         avg = add(avg, get3(&self.vpos, w as usize));
+                        smooth &= dot(n, get3(&self.vnrm, w as usize)) > 0.7;
                     }
-                    let mut d = sub(scale(avg, 1.0 / (e - s).max(1) as f32), p);
-                    let n = get3(&self.vnrm, v);
-                    d = sub(d, scale(n, dot(d, n)));
-                    let q = add(p, scale(d, 0.5));
+                    let q = if smooth {
+                        let mut d = sub(scale(avg, 1.0 / (e - s).max(1) as f32), p);
+                        d = sub(d, scale(n, dot(d, n)));
+                        add(p, scale(d, 0.5))
+                    } else {
+                        p
+                    };
                     self.tmp[3 * v..3 * v + 3].copy_from_slice(&q);
                     *left -= 2;
                 } else {
@@ -1340,9 +1348,9 @@ pub fn estimate(info: &SourceInfo, params: Params) -> Estimate {
     let quads = (info.s1 / (h * h)).ceil() as u64;
     let verts = quads + 2;
     let tris = 2 * quads;
-    // Allocated bricks: surface bricks plus their -1 neighbours (measured <= 3.2 x S1/(8h)^2 on
-    // the fuzz suite and the sphere; 4x keeps the estimate an upper bound).
-    let bricks = ((4.0 * info.s1 / (64.0 * h * h)).ceil() as u64 + 8).min(grid.bricks());
+    // Allocated bricks: surface bricks plus their -1 neighbours (measured <= 1.19 x S1/(8h)^2 on
+    // the estimate suite, 1.12 on the 500k sphere; 1.6x + 64 keeps the estimate an upper bound).
+    let bricks = ((1.6 * info.s1 / (64.0 * h * h)).ceil() as u64 + 64).min(grid.bricks());
     let src_tris = info.ntris + 64;
     let bvh = src_tris * (4 + 12) + (2 * src_tris / 4 + 1) * 32;
     let surface = verts * (12 + 12 + 12 + 1 + 4) + quads * (16 + 16);
