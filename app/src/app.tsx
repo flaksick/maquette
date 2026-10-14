@@ -7,6 +7,7 @@ import { offline, updateWaiting, autoUpdate, setAutoUpdate, checkForUpdate } fro
 import BalloonWorker from './balloon.worker?worker';
 import type { ToolName } from './shared/protocol';
 import { BUDGET, CHANNEL } from './config';
+import { ExportFormat, ImportButton, ImportSheet, requestExport } from './io-ui'; // [io]
 
 const TOOLS: { id: ToolName; label: string; feature: string }[] = [
   { id: 'draw', label: 'Draw', feature: 'BRS-1' },
@@ -55,10 +56,11 @@ function TopBar() {
           Mirror X
         </button>
         <button data-feature="PRM-1" onClick={() => (ui.sheet.value = 'new')}>New</button>
+        <ImportButton />
         <button data-feature="EXP-7" onClick={() => {
           ui.exportFile.value = null;
           ui.sheet.value = 'export';
-          bus.send({ type: 'export-obj' });
+          requestExport(); // [io] OBJ or STL, whichever the sheet shows
         }}>Export</button>
         <button data-feature="PLT-9" onClick={() => (ui.sheet.value = 'settings')}>Settings</button>
       </div>
@@ -212,7 +214,8 @@ function ExportSheet() {
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   };
   return (
-    <Sheet title="Export OBJ">
+    <Sheet title="Export">
+      <ExportFormat />
       {!f ? (
         <p>Preparing…</p>
       ) : (
@@ -411,6 +414,7 @@ export function App() {
       {sheet === 'export' && <ExportSheet />}
       {sheet === 'settings' && <SettingsSheet />}
       {sheet === 'diag' && <DiagSheet />}
+      {sheet === 'import' && <ImportSheet />}
     </div>
   );
 }

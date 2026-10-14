@@ -56,6 +56,10 @@ export type ToEngine =
   | { type: 'reset-view' }
   | { type: 'new-sphere'; n: number }
   | { type: 'export-obj' }
+  // [io] import / units / STL export (IMP-0/1/2, PRJ-9, EXP-2)
+  | { type: 'import-mesh'; name: string; ext: string; bytes: ArrayBuffer }
+  | { type: 'set-units'; units: Units }
+  | { type: 'export-stl' }
   | { type: 'visible' }
   | { type: 'hidden' }
   | { type: 'debug-trap' }
@@ -68,7 +72,11 @@ export type FromEngine =
   | { type: 'saved'; seq: number; latencyMs: number }
   | { type: 'status'; text: string; level: 'info' | 'warn' | 'error' }
   | { type: 'storage'; ok: boolean; error?: string; persisted?: boolean }
-  | { type: 'export-ready'; name: string; bytes: ArrayBuffer; faces: number; verts: number }
+  | { type: 'export-ready'; name: string; bytes: ArrayBuffer; faces: number; verts: number; format?: 'obj' | 'stl'; mime?: string; boundaryEdges?: number; units?: Units; scale?: number }
+  // [io] import / units (IMP-0/1/2, PRJ-9)
+  | { type: 'import-done'; report: ImportReport }
+  | { type: 'import-failed'; text: string }
+  | { type: 'units'; units: Units }
   | { type: 'refused'; text: string }
   | { type: 'state'; brush?: BrushState }
   | { type: 'fatal'; error: string }
@@ -114,3 +122,37 @@ export interface PersistReply {
 
 /** Channel-namespaced storage root (decision row "Persistence"). */
 export const STORAGE_ROOT = (channel: string) => `app-${channel}`;
+
+// ---------- [io] import, units, STL export (IMP-0/1/2, PRJ-9, EXP-2) ----------
+
+/** What one unit of the project means (PRJ-9). Index = the engine's code (core/src/io Units). */
+export type Units = 'mm' | 'cm' | 'm';
+export const UNITS: readonly Units[] = ['mm', 'cm', 'm'];
+/** STL export scale: project units -> millimetres. */
+export const UNIT_TO_MM: Record<Units, number> = { mm: 1, cm: 10, m: 1000 };
+
+/** IMP-0 counts from core/src/io ImportReport (exact). */
+export interface ImportReport {
+  name: string;
+  format: 'obj' | 'stl-binary' | 'stl-ascii';
+  inVerts: number;
+  inFaces: number;
+  weldedVerts: number;
+  droppedDuplicate: number;
+  droppedDegenerate: number;
+  flippedFaces: number;
+  splitNonManifold: number;
+  components: number;
+  boundaryEdges: number;
+  looseVerts: number;
+  verts: number;
+  faces: number;
+  tris: number;
+  coloredVerts: number;
+  groups: number;
+  ignoredElements: number;
+  unitsGuess: Units;
+  /** min xyz, max xyz in file units (engine axes: Y up). */
+  bbox: number[];
+  ms: number;
+}

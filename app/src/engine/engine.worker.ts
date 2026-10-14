@@ -14,6 +14,10 @@ import {
   type Stats,
   type ToEngine,
   type ToPersist,
+  type ImportReport,
+  type Units,
+  UNITS,
+  UNIT_TO_MM,
 } from '../shared/protocol';
 
 const DEFAULT_SPHERE = 96; // 110,592 triangles
@@ -50,6 +54,7 @@ let ckptInFlight = false;
 let highWaterMB = 0;
 let lastStatsPost = 0;
 let stateTimer: ReturnType<typeof setTimeout> | null = null;
+let units: Units = 'm'; // PRJ-9: what one unit means; saved with the view state, default metres
 
 const post = (m: FromEngine, t: Transferable[] = []) => scope.postMessage(m, t);
 
@@ -177,10 +182,15 @@ function frameView(reset: boolean): void {
 
 function saveStateSoon(): void {
   if (stateTimer) clearTimeout(stateTimer);
-  stateTimer = setTimeout(() => {
-    if (!storageOk || !projectId) return;
-    void call({ type: 'state', json: JSON.stringify({ camera: { eye: cam.eye, yaw: cam.yaw, pitch: cam.pitch }, brush }) });
-  }, 1000);
+  stateTimer = setTimeout(saveStateNow, 1000);
+}
+
+/** View and tool state (PRJ-10) plus the project's units (PRJ-9), written now. */
+function saveStateNow(): void {
+  if (stateTimer) clearTimeout(stateTimer);
+  stateTimer = null;
+  if (!storageOk || !projectId) return;
+  void call({ type: 'state', json: JSON.stringify({ camera: { eye: cam.eye, yaw: cam.yaw, pitch: cam.pitch }, brush, units }) });
 }
 
 // ---------- saving ----------
@@ -264,21 +274,95 @@ async function createSphere(n: number): Promise<boolean> {
     return false;
   }
   core.x.eng_new_sphere(n, LEAF);
+  await createProjectFromEngine(`Sphere ${12 * n * n}`, 'm');
+  return true;
+}
+
+/** A new project from the mesh the engine holds now (sphere, import): history reset, files written
+ *  through persist 'create', view framed. Brush and camera live in the engine, so the brush is
+ *  re-sent after every install (the camera is committed before each stroke). */
+async function createProjectFromEngine(name: string, u: Units): Promise<void> {
   core.x.eng_set_history(Math.round(budgetMB * 0.25), 200);
+  setBrush(brush);
   lastAcked = 0;
   journalBytes = 0;
+  units = u;
   const tlen = core.x.eng_topo_bytes();
   const topo = core.out(tlen);
   const positions = new Uint8Array(core.mem(), core.x.eng_positions_ptr(), core.x.eng_positions_bytes()).slice().buffer;
   projectId = crypto.randomUUID();
   if (storageOk) {
-    const r = await call({ type: 'create', projectId, name: `Sphere ${12 * n * n}`, topo, positions }, [topo, positions]);
+    const r = await call({ type: 'create', projectId, name, topo, positions }, [topo, positions]);
     if (!r.ok) storageFailed(r.error);
   }
   frameView(true);
+  saveStateNow();
   renderer.uploadAll(core);
   requestFrame();
-  return true;
+  post({ type: 'units', units });
+}
+
+// ---------- [io] import (IMP-0/1/2) ----------
+const IMPORT_HINT: Record<string, number> = { obj: 1, stl: 2 };
+const REPORT_WORDS = 26; // core/src/io ImportReport::to_words
+const IMPORT_ERRORS = ['', 'not a mesh file it can read', 'there are no faces in it', 'a number it can\u2019t read', 'a face points at a vertex that isn\u2019t there', 'the file is cut short', 'it is too large', 'cleanup failed (a bug)'];
+const FORMATS: ImportReport['format'][] = ['obj', 'obj', 'stl-binary', 'stl-ascii'];
+
+/** Parses + cleans in WASM, installs the mesh, then makes it a NEW project (the previous one
+ *  stays saved). On any failure the current sculpt is untouched. */
+async function importMesh(name: string, ext: string, bytes: ArrayBuffer): Promise<void> {
+  const hint = IMPORT_HINT[ext.toLowerCase()];
+  if (!hint) {
+    post({ type: 'import-failed', text: `Maquette imports .obj and .stl files; \u201c${name}\u201d isn\u2019t one.` });
+    return;
+  }
+  // Pre-flight (PLT-8): parse + cleanup + the new mesh, from the file size. OBJ ~50 bytes per
+  // vertex; STL 50 bytes per facet, ~2 facets per vertex. Refused before any memory is touched.
+  const perByte = hint === 1 ? 2 + 290 / 50 : 2 + 160 / 50 + BYTES_PER_VERTEX / 100;
+  const needMB = (bytes.byteLength * perByte) / 2 ** 20;
+  if (needMB > budgetMB) {
+    post({ type: 'import-failed', text: `${name} needs about ${Math.round(needMB)} MB to import; this iPad's budget is ${budgetMB} MB.` });
+    return;
+  }
+  const t0 = performance.now();
+  const src = new Uint8Array(bytes);
+  const ptr = core.x.mq_alloc(src.length);
+  new Uint8Array(core.mem(), ptr, src.length).set(src);
+  const rp = core.x.eng_import(ptr, src.length, hint, LEAF);
+  core.x.mq_free(ptr, src.length);
+  const w = core.u32s(rp, REPORT_WORDS).slice();
+  if (w[0] !== 0) {
+    const why = IMPORT_ERRORS[w[0]] ?? `error ${w[0]}`;
+    post({ type: 'import-failed', text: `Couldn\u2019t import ${name}: ${why}${w[2] ? ` (line ${w[2]})` : ''}. Your sculpt is unchanged.` });
+    return;
+  }
+  const report: ImportReport = {
+    name,
+    format: FORMATS[w[1]] ?? 'obj',
+    inVerts: w[3],
+    inFaces: w[4],
+    weldedVerts: w[5],
+    droppedDuplicate: w[6],
+    droppedDegenerate: w[7],
+    flippedFaces: w[8],
+    splitNonManifold: w[9],
+    components: w[10],
+    boundaryEdges: w[11],
+    looseVerts: w[12],
+    verts: w[13],
+    faces: w[14],
+    tris: w[15],
+    coloredVerts: w[16],
+    groups: w[17],
+    ignoredElements: w[18],
+    unitsGuess: UNITS[w[19]] ?? 'm',
+    bbox: Array.from(new Float32Array(w.buffer, 20 * 4, 6)),
+    ms: 0,
+  };
+  await createProjectFromEngine(name.replace(/\.[^.]*$/, '') || 'Import', report.unitsGuess);
+  report.ms = Math.round(performance.now() - t0);
+  post({ type: 'import-done', report });
+  postStats(true);
 }
 
 function loadProject(r: OpenResult, unclean: boolean): RecoveryInfo {
@@ -317,12 +401,14 @@ function loadProject(r: OpenResult, unclean: boolean): RecoveryInfo {
   core.x.eng_set_seq(lastSeq);
   lastAcked = lastSeq;
   projectId = r.projectId!;
-  // Restore view and tool state (PRJ-10).
+  // Restore view and tool state (PRJ-10) and the project's units (PRJ-9).
+  units = 'm';
   let restoredCamera = false;
   if (r.state) {
     try {
-      const st = JSON.parse(r.state) as { camera?: { eye: V3; yaw: number; pitch: number }; brush?: BrushState };
+      const st = JSON.parse(r.state) as { camera?: { eye: V3; yaw: number; pitch: number }; brush?: BrushState; units?: Units };
       if (st.brush) brush = { ...brush, ...st.brush };
+      if (st.units && UNITS.includes(st.units)) units = st.units;
       frameView(false);
       if (st.camera) {
         cam.eye = st.camera.eye;
@@ -378,6 +464,7 @@ async function init(m: Extract<ToEngine, { type: 'init' }>): Promise<void> {
   requestFrame();
   if (recovered.records > 0 || recovered.stoppedAt) void checkpoint();
   post({ type: 'ready', stats: stats(), recovered, brush, simd: core.simd });
+  post({ type: 'units', units });
   if (!storageOk) post({ type: 'storage', ok: false, error: 'storage unavailable' });
   setInterval(() => {
     if (storageOk) void call({ type: 'session-beat', highWaterMB: Math.round(highWaterMB), seq: core.x.eng_seq() });
@@ -490,6 +577,31 @@ scope.onmessage = async (e: MessageEvent<ToEngine>) => {
       if (strokeActive) break;
       if (await createSphere(m.n)) post({ type: 'stats', stats: stats() });
       break;
+    // [io] import, units, STL export (IMP-0/1/2, PRJ-9, EXP-2)
+    case 'import-mesh':
+      if (strokeActive) {
+        post({ type: 'import-failed', text: 'Finish the stroke, then import.' });
+        break;
+      }
+      await importMesh(m.name, m.ext, m.bytes);
+      break;
+    case 'set-units':
+      if (!UNITS.includes(m.units)) break;
+      units = m.units;
+      saveStateNow();
+      post({ type: 'units', units });
+      break;
+    case 'export-stl': {
+      const scale = UNIT_TO_MM[units];
+      const ip = core.x.mq_alloc(12);
+      const len = core.x.eng_export_stl(scale, ip);
+      const [tris, boundaryEdges] = core.u32s(ip, 3);
+      core.x.mq_free(ip, 12);
+      const bytes = core.out(len);
+      const date = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+      post({ type: 'export-ready', name: `maquette-${date}.stl`, bytes, faces: tris, verts: stats().verts, format: 'stl', mime: 'model/stl', boundaryEdges, units, scale }, [bytes]);
+      break;
+    }
     case 'export-obj': {
       const fp = core.x.mq_alloc(4);
       const len = core.x.eng_export_obj(fp);

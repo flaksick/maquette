@@ -273,3 +273,30 @@ pre.diag {
   color: var(--dim);
   white-space: pre-wrap;
 }
+/* ---------- [io] import, units, export format (IMP-0/1, PRJ-9, EXP-2) ---------- */
+.hidden-input {
+  display: none;
+}
+.segmented {
+  display: inline-flex;
+  gap: 4px;
+}
+.segmented button {
+  min-width: 56px;
+}
+table.counts {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+table.counts td {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+table.counts td:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.warn-text {
+  color: #d9b06a;
+}

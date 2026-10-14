@@ -9,6 +9,7 @@ import { SHEETS, ui } from './state';
 import { bus } from './bus';
 import { InputController } from './input';
 import { registerServiceWorker } from './sw-client';
+import { io, ioMessage } from './io-ui';
 import type { FromEngine, ToEngine } from './shared/protocol';
 
 
@@ -71,6 +72,7 @@ function restartEngine(error: string): void {
 }
 
 function onEngine(m: FromEngine): void {
+  ioMessage(m); // [io] import report, units, STL export details
   switch (m.type) {
     case 'ready':
       ui.ready.value = true;
@@ -98,7 +100,7 @@ function onEngine(m: FromEngine): void {
       ui.notice.value = { level: 'warn', text: m.text };
       break;
     case 'export-ready':
-      ui.exportFile.value = { name: m.name, file: new File([m.bytes], m.name, { type: 'text/plain' }), faces: m.faces, verts: m.verts };
+      ui.exportFile.value = { name: m.name, file: new File([m.bytes], m.name, { type: m.mime ?? 'text/plain' }), faces: m.faces, verts: m.verts };
       break;
     case 'fatal':
       restartEngine(m.error);
@@ -144,4 +146,4 @@ new ResizeObserver(queueResize).observe(document.getElementById('viewport')!);
 window.addEventListener('resize', queueResize);
 window.addEventListener('orientationchange', queueResize);
 document.addEventListener('visibilitychange', () => send({ type: document.visibilityState === 'visible' ? 'visible' : 'hidden' }));
-(window as unknown as { __maquette: unknown }).__maquette = { ui, query, send, input: input.stats, sheets: SHEETS };
+(window as unknown as { __maquette: unknown }).__maquette = { ui, query, send, input: input.stats, sheets: SHEETS, io };
