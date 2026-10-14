@@ -14,6 +14,11 @@ const DEFAULTS: Record<ToolName, ToolSetting> = {
   smooth: { radius: 50, strength: 0.5 },
   grab: { radius: 90, strength: 1 },
 };
+/** Every sheet the app can show. scripts/check-ui.mjs opens each one (invariant 7: no fake UI),
+ *  so a sheet missing from this list is a sheet the registry check never sees. */
+export const SHEETS = ['new', 'export', 'settings', 'diag'] as const;
+export type SheetName = (typeof SHEETS)[number];
+
 const PRESSURE: Record<ToolName, { radius: boolean; strength: boolean }> = {
   draw: { radius: false, strength: true },
   smooth: { radius: false, strength: true },
@@ -33,7 +38,7 @@ export const ui = {
   symmetry: signal(true),
   gamma: signal(1),
   fingerSculpts: signal(false),
-  sheet: signal<'none' | 'new' | 'export' | 'settings' | 'diag'>('none'),
+  sheet: signal<'none' | SheetName>('none'),
   exportFile: signal<{ name: string; file: File; faces: number; verts: number } | null>(null),
 
   brush(): BrushState {

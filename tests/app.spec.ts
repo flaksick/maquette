@@ -62,7 +62,9 @@ async function reopen(ctx: BrowserContext, page: Page): Promise<Page> {
   return p;
 }
 
-test('P1a: sculpt, undo/redo, survive kills, offline, idle, export', async () => {
+// Title IDs are this test's feature evidence (scripts/feature-status.mjs); PRJ-4 is added as an
+// annotation only when the real kills ran.
+test('UND-1 NAV-2 PLT-10 PLT-2 EXP-7 PLT-7: sculpt, undo/redo, idle, offline relaunch, export, engine trap (+ PRJ-4 kills)', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'maquette-app-'));
   const ctx = await webkit.launchPersistentContext(profile, { viewport: { width: 1180, height: 820 }, acceptDownloads: true });
   const errors: string[] = [];
@@ -115,6 +117,7 @@ test('P1a: sculpt, undo/redo, survive kills, offline, idle, export', async () =>
     const after2 = await q(page);
     results.killMidStroke = { killedProcesses: killed2, hashMatchesLastAck: after2.hash === h2 };
     expect(after2.hash).toBe(h2);
+    test.info().annotations.push({ type: 'feature', description: 'PRJ-4' });
     }
 
     // Idle is free (PLT-10): no frames while nothing changes.

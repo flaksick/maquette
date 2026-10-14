@@ -31,11 +31,20 @@ spec.yaml        feature registry (source of truth) → SPEC.md
 - Engine tests: `cd core && cargo test` · native benchmark: `cargo test --release -- --ignored --nocapture bench_native`
 - Probe: `npm run probe:build` → `dist/probe`; local dev with isolation headers: `npm run probe:dev`
 - WebKit e2e: build, copy to `deploy/dev/probe`, `npx playwright test` (serves like GitHub Pages)
-- Everything: `npm run verify` (numbered conditions, measured values, PASS/FAIL)
+- Everything: `npm run verify` (numbered conditions, measured values, PASS/FAIL): builds, Rust, types,
+  registry, bundle audit, secrets, every WebKit e2e, the Blender oracle on the e2e's OBJ export, the
+  no-fake-UI check and the feature-status table. Parallel runs set `MAQUETTE_PORT` and `MAQUETTE_NO_KILL=1`.
+- Feature status: `npm run status` (computed from ID-tagged tests + device reports <= 14 days old)
+- No fake UI (invariant 7): `npm run check-ui` (every control has a feature ID of the current phase or earlier)
 - Deploy the dev channel: `npm run deploy:dev` → https://flaksick.github.io/maquette/dev/probe/
 
 ## Conventions
 - Every acceptance criterion is a script that prints a number; any fix re-runs every condition.
+- Tests that verify a feature carry its ID: Rust names start with lowercase IDs (`prj4_random_kill_...`,
+  `brs1_sym1_und1_draw_...`), Playwright titles with IDs (`PLT-3: ...`); conditional parts add a
+  `{ type: 'feature', description: 'PRJ-4' }` annotation. Status is never written by hand.
+- Every control renders with `data-feature="<ID>"` (or `data-ui="chrome"` for close buttons and the
+  like); every sheet is listed in `SHEETS` (app/src/state.ts) so the UI check opens it.
 - WebKit's ephemeral contexts reject OPFS: tests use persistent profiles.
 - Commits use the GitHub no-reply email (repo-local config). Hooks live in `scripts/hooks`
   (`git config core.hooksPath scripts/hooks`).

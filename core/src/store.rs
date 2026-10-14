@@ -143,7 +143,7 @@ mod tests {
     use crate::sphere::cube_sphere;
 
     #[test]
-    fn save_load_roundtrip_is_exact() {
+    fn prj2_save_load_roundtrip_is_exact() {
         let m = EditMesh::from_trimesh(cube_sphere(24), 64);
         let t = topo_bytes(&m);
         let p = positions_bytes(&m);
@@ -156,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn damaged_topology_is_rejected() {
+    fn prj2_damaged_topology_is_rejected() {
         let m = EditMesh::from_trimesh(cube_sphere(8), 32);
         let mut t = topo_bytes(&m);
         let p = positions_bytes(&m);
@@ -169,7 +169,7 @@ mod tests {
     /// (torn write), recover = checkpoint + every valid record. The recovered mesh must equal the
     /// state after the last fully written record — 200 runs.
     #[test]
-    fn random_kill_recovery_200_runs() {
+    fn prj4_random_kill_recovery_200_runs() {
         let mut seed = 0x1234_5678u32;
         let mut rnd = move || {
             seed ^= seed << 13;

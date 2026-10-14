@@ -174,7 +174,7 @@ function NewSheet() {
       <p>
         {fmt(tris)} triangles · about {fmt(needMB)} MB {fits ? '' : `· over this iPad's ${fmt(BUDGET.mb)} MB budget`}
       </p>
-      <button class="primary" disabled={!fits} onClick={() => {
+      <button class="primary" data-feature="PRM-1" disabled={!fits} onClick={() => {
         bus.send({ type: 'new-sphere', n });
         ui.sheet.value = 'none';
       }}>

@@ -12,7 +12,7 @@ async function waitStatus(page: Page, id: string, done: RegExp, timeout = 180_00
   return text ? JSON.parse(text) : null;
 }
 
-test('probe runs in WebKit served like GitHub Pages', async () => {
+test('S9: probe runs in WebKit served like GitHub Pages', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'maquette-wk-'));
   const ctx = await webkit.launchPersistentContext(profile, { viewport: { width: 1180, height: 820 } });
   const page = await ctx.newPage();
