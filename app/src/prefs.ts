@@ -99,19 +99,35 @@ export async function loadPrefs(): Promise<void> {
   }
 }
 
-/** After the engine opens a project: per-tool presets into the UI, except the open project's own
- *  saved brush (PRJ-10) for its tool. The pressure curve is global. Then the brush goes out. */
+/** True while a project's saved brush is being applied: that is not the user changing a preset
+ *  (a project's state is saved a second after the last change, so it can be older than the
+ *  presets, which must not be overwritten with it). */
+let holding = false;
+export function holdPresets(): void {
+  holding = true;
+}
+
+/** After the engine opens a project: the project brings back its tool and mirror setting
+ *  (PRJ-10); size and strength per tool come from the presets (PRJ-11), as does the pressure
+ *  curve. Then the brush goes out to the engine. */
 export async function onProjectOpened(m: { brush: BrushState; brushRestored: boolean }): Promise<void> {
-  await prefsReady;
-  if (m.brushRestored) ui.applyBrush(m.brush);
-  const tools = { ...(ui.tools.value as Record<string, ToolSetting>) };
-  for (const name of Object.keys(tools)) {
-    if (m.brushRestored && name === m.brush.tool) continue;
-    const t = prefs.value.tools[name];
-    if (t) tools[name] = { ...tools[name], radius: t.radius, strength: t.strength };
+  holding = true;
+  try {
+    await prefsReady;
+    if (m.brushRestored) {
+      ui.tool.value = m.brush.tool;
+      ui.symmetry.value = m.brush.symmetryX;
+    }
+    const tools = { ...(ui.tools.value as Record<string, ToolSetting>) };
+    for (const name of Object.keys(tools)) {
+      const t = prefs.value.tools[name];
+      if (t) tools[name] = { ...tools[name], radius: t.radius, strength: t.strength };
+    }
+    ui.tools.value = tools as typeof ui.tools.value;
+    ui.gamma.value = prefs.value.gamma;
+  } finally {
+    holding = false;
   }
-  ui.tools.value = tools as typeof ui.tools.value;
-  ui.gamma.value = prefs.value.gamma;
   ui.pushBrush();
 }
 
@@ -120,7 +136,7 @@ effect(() => {
   const fingerSculpts = ui.fingerSculpts.value;
   const gamma = ui.gamma.value;
   const tools = ui.tools.value as Record<string, ToolSetting>;
-  if (prefsSource.peek() === 'loading') return;
+  if (prefsSource.peek() === 'loading' || holding) return;
   const p = prefs.peek();
   const nextTools = { ...p.tools };
   let changed = p.fingerSculpts !== fingerSculpts || p.gamma !== gamma;
