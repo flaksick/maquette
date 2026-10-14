@@ -77,8 +77,14 @@ export interface Manifest {
   journalGen: number;
   /** Set while the project is in Recently Deleted (PRJ-1). */
   deletedAt?: string;
+  /** Mesh files, when not the fixed names (a remesh writes new files, then flips the manifest). */
+  topoFile?: string;
+  positionsFile?: string;
   crc?: number;
 }
+
+const topoName = (m: Manifest) => m.topoFile ?? 'topo.bin';
+const positionsName = (m: Manifest) => m.positionsFile ?? 'positions.bin';
 
 /** What the library needs from the persist worker (its storage primitives and open project). */
 export interface LibraryCtx {
@@ -215,9 +221,9 @@ async function describe(ctx: LibraryCtx, id: string, dir: FileSystemDirectoryHan
   let modifiedAt = 0;
   for (const [name, f] of files) {
     bytes += f.size;
-    if (name === 'topo.bin' || name === 'positions.bin' || SEGMENT.test(name)) modifiedAt = Math.max(modifiedAt, f.lastModified);
+    if (name === topoName(m) || name === positionsName(m) || SEGMENT.test(name)) modifiedAt = Math.max(modifiedAt, f.lastModified);
   }
-  const topo = files.get('topo.bin');
+  const topo = files.get(topoName(m));
   const counts = topo ? topoCounts(new Uint8Array(await topo.slice(0, TOPO_HEADER).arrayBuffer())) : null;
   return {
     id,
@@ -306,8 +312,8 @@ async function duplicate(ctx: LibraryCtx, id: string): Promise<ProjectInfo> {
   const { dir, m } = await mustManifest(ctx, id);
   if (m.deletedAt) throw invalid('Restore the project before duplicating it.');
   const files = await filesOf(dir);
-  const topo = files.get('topo.bin');
-  const positions = files.get('positions.bin');
+  const topo = files.get(topoName(m));
+  const positions = files.get(positionsName(m));
   if (!topo || !positions) throw invalid('That project is damaged (mesh files missing).');
   const segs = segments(files, m);
   const state = files.get('state.json');
@@ -318,13 +324,15 @@ async function duplicate(ctx: LibraryCtx, id: string): Promise<ProjectInfo> {
     // The copy recovers exactly like the source: same positions, same live journal segments
     // (same generations), so the same records replay. No checkpoint can run during this
     // operation (the persist queue is serial); appends only add bytes past each size read.
-    await copyFile(ctx, topo, dst, 'topo.bin');
-    await copyFile(ctx, positions, dst, 'positions.bin');
+    await copyFile(ctx, topo, dst, topoName(m));
+    await copyFile(ctx, positions, dst, positionsName(m));
     for (const s of segs) await copyFile(ctx, s.file, dst, `journal-${s.gen}.bin`);
     if (!segs.length) await ctx.writeWhole(dst, `journal-${m.journalGen}.bin`, new Uint8Array(0));
     if (state) await copyFile(ctx, state, dst, 'state.json');
-    const name = cleanName(`${m.name} copy`);
-    await ctx.writeManifest(dst, { schema: 1, id: newId, name, createdAt: new Date().toISOString(), gen: 1, checkpointSeq: m.checkpointSeq, journalGen: m.journalGen });
+    // Same fields as the source (file names included), as a new project.
+    const next: Manifest = { ...m, id: newId, name: cleanName(`${m.name} copy`), createdAt: new Date().toISOString(), gen: 1 };
+    delete next.crc;
+    await ctx.writeManifest(dst, next);
   } catch (e) {
     await removeDir(ctx, newId);
     throw e;
@@ -397,8 +405,8 @@ const concat = (parts: Uint8Array[]): Uint8Array => {
 async function addProject(ctx: LibraryCtx, zip: ZipBlob, id: string, prefix: string): Promise<{ name: string; tris: number }> {
   const { dir, m } = await mustManifest(ctx, id);
   const files = await filesOf(dir);
-  const topo = files.get('topo.bin');
-  const positionsFile = files.get('positions.bin');
+  const topo = files.get(topoName(m)); // stored under the fixed names whatever they are called on disk
+  const positionsFile = files.get(positionsName(m));
   if (!topo || !positionsFile) throw invalid(`“${m.name}” is damaged (mesh files missing).`);
   const counts = topoCounts(new Uint8Array(await topo.slice(0, TOPO_HEADER).arrayBuffer()));
   if (!counts || positionsFile.size !== counts.verts * 12) throw invalid(`“${m.name}” is damaged (mesh files disagree).`);

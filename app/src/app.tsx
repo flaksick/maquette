@@ -7,6 +7,9 @@ import { offline, updateWaiting, autoUpdate, setAutoUpdate, checkForUpdate } fro
 import BalloonWorker from './balloon.worker?worker';
 import type { ToolName } from './shared/protocol';
 import { BUDGET, CHANNEL } from './config';
+import { Sheet } from './sheet';
+import { ProjectsSheet } from './gallery';
+import { DiskBanner, GestureCard, StorageSettings } from './safety';
 
 const TOOLS: { id: ToolName; label: string; feature: string }[] = [
   { id: 'draw', label: 'Draw', feature: 'BRS-1' },
@@ -34,6 +37,7 @@ function TopBar() {
   return (
     <header class="top">
       <div class="brand">Maquette</div>
+      <button data-feature="PRJ-1" onClick={() => (ui.sheet.value = 'projects')}>Projects</button>
       <div class="group">
         <button data-feature="NAV-2" disabled={!st?.undoDepth} onClick={() => bus.send({ type: 'undo' })}>
           Undo{st?.undoDepth ? ` (${st.undoDepth})` : ''}
@@ -145,20 +149,6 @@ function ViewButtons() {
   );
 }
 
-function Sheet(props: { title: string; children: preact.ComponentChildren }) {
-  return (
-    <div class="sheet-back" onClick={(e) => e.target === e.currentTarget && (ui.sheet.value = 'none')}>
-      <div class="sheet" role="dialog" aria-label={props.title}>
-        <div class="sheet-head">
-          <h2>{props.title}</h2>
-          <button data-ui="chrome" onClick={() => (ui.sheet.value = 'none')}>Close</button>
-        </div>
-        {props.children}
-      </div>
-    </div>
-  );
-}
-
 function NewSheet() {
   const [n, setN] = useState(96);
   const tris = 12 * n * n;
@@ -261,6 +251,7 @@ function SettingsSheet() {
         {upd && <span class="dim">{upd}</span>}
       </div>
       {updateWaiting.value && <p class="ok-text">An update is ready. It applies the next time you open Maquette.</p>}
+      <StorageSettings />
       <p class="dim">Undo history clears when Maquette closes; your sculpt itself is saved after every stroke.</p>
       <p class="dim">
         Version {offline.value.version ?? 'dev'} · engine {ui.simd.value ? 'SIMD' : 'scalar'} · memory budget {fmt(BUDGET.mb)} MB ({BUDGET.source})
@@ -399,18 +390,21 @@ export function App() {
     <div class="app">
       <TopBar />
       <StorageBanner />
+      <DiskBanner />
       <main id="viewport">
         <Tools />
         <Sliders />
         <Hud />
         <ViewButtons />
         <Notice />
+        <GestureCard />
         {!ui.ready.value && <div class="loading">Loading your sculpt…</div>}
       </main>
       {sheet === 'new' && <NewSheet />}
       {sheet === 'export' && <ExportSheet />}
       {sheet === 'settings' && <SettingsSheet />}
       {sheet === 'diag' && <DiagSheet />}
+      {sheet === 'projects' && <ProjectsSheet />}
     </div>
   );
 }

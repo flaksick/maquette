@@ -5,8 +5,6 @@
 // long operations serve journal appends between chunks (journal first, invariant 4).
 // Opening a project goes through the engine (it must load the mesh): ToEngine 'open-project'.
 
-import type { ToolName } from './protocol';
-
 export interface ProjectInfo {
   id: string;
   name: string;
@@ -35,8 +33,9 @@ export interface Prefs {
   fingerSculpts: boolean;
   /** Pressure curve exponent (STK-2). */
   gamma: number;
-  /** Last-used size and strength per tool: what a new project starts with. */
-  tools: Record<ToolName, ToolPreset>;
+  /** Last-used size and strength per tool, keyed by the tool's stable name ('draw', 'clay', ...):
+   *  what a new project starts with. Tools missing here start from their defaults. */
+  tools: Record<string, ToolPreset>;
   autoUpdate: boolean;
   /** NAV-10: the gesture card was dismissed once. */
   gestureCardSeen: boolean;
