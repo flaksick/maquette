@@ -229,3 +229,107 @@ test('PRJ-1: gallery creates, switches, renames, duplicates, deletes to Recently
   }
   expect(errors).toEqual([]);
 });
+
+/** Reads a STORE-only ZIP's central directory (Node side, independent of the app's reader). */
+function unzip(buf: Buffer): Map<string, { data: Buffer; crc: number }> {
+  let end = buf.length - 22;
+  while (end >= 0 && buf.readUInt32LE(end) !== 0x06054b50) end--;
+  if (end < 0) throw new Error('no end-of-central-directory record');
+  const count = buf.readUInt16LE(end + 10);
+  let at = buf.readUInt32LE(end + 16);
+  const out = new Map<string, { data: Buffer; crc: number }>();
+  for (let i = 0; i < count; i++) {
+    if (buf.readUInt32LE(at) !== 0x02014b50) throw new Error('bad central header');
+    const method = buf.readUInt16LE(at + 10);
+    const crc = buf.readUInt32LE(at + 16);
+    const size = buf.readUInt32LE(at + 24);
+    const nameLen = buf.readUInt16LE(at + 28);
+    const extra = buf.readUInt16LE(at + 30);
+    const comment = buf.readUInt16LE(at + 32);
+    const local = buf.readUInt32LE(at + 42);
+    const name = buf.toString('utf8', at + 46, at + 46 + nameLen);
+    if (method !== 0) throw new Error(`${name} is not stored`);
+    const dataAt = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+    out.set(name, { data: buf.subarray(dataAt, dataAt + size), crc });
+    at += 46 + nameLen + extra + comment;
+  }
+  return out;
+}
+const crcOk = (z: Map<string, { data: Buffer; crc: number }>) => [...z.values()].every((e) => crc32(e.data) >>> 0 === e.crc);
+
+test('PRJ-5: .maquette file exports, re-imports hash-identical, and refuses damaged files', async () => {
+  const { page, done, errors } = await launch();
+  const r: Record<string, unknown> = {};
+  try {
+    const src = await currentId(page);
+    const h1 = await strokeSaved(page);
+
+    // Export through the gallery (two-step: prepare, then a fresh tap on Download).
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    const t0 = Date.now();
+    await row(page, src).getByRole('button', { name: 'Export' }).click();
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('[data-prepared="project"]').getByRole('button', { name: 'Download' }).click()]);
+    r.exportMs = Date.now() - t0;
+    const file = 'test-results/prj5-export.maquette';
+    await dl.saveAs(file);
+    r.fileName = dl.suggestedFilename();
+    const bytes = readFileSync(file);
+    const z = unzip(bytes);
+    const meta = JSON.parse(z.get('maquette.json')!.data.toString('utf8'));
+    r.file = { bytes: bytes.length, entries: [...z.keys()], crcsValid: crcOk(z), format: meta.format, formatVersion: meta.formatVersion, mesh: meta.mesh };
+    expect(r.fileName).toMatch(/\.maquette$/);
+    expect(crcOk(z)).toBe(true);
+    expect(meta.format).toBe('maquette-project');
+    expect(z.get('positions.bin')!.data.length).toBe(meta.mesh.verts * 12);
+
+    // Import it back through the picker (no accept filter) and open the copy.
+    const t1 = Date.now();
+    await page.locator('input[type=file][data-feature="PRJ-5"]').setInputFiles(file);
+    await expect(page.getByText('Imported 1 project.')).toBeVisible();
+    r.importMs = Date.now() - t1;
+    const imported = (await list(page)).find((p) => p.id !== src)!;
+    await row(page, imported.id).getByRole('button', { name: 'Open' }).click();
+    await waitCurrent(page, (c) => c === imported.id);
+    const hImported = (await q(page)).hash;
+    r.hashes = { exported: h1, reimported: hImported };
+    expect(hImported).toBe(h1);
+
+    // A project with records not yet checkpointed: the file carries them (journal.bin) and the
+    // import replays them to the same mesh.
+    const h2 = await strokeSaved(page, 30);
+    const viaJournal = await page.evaluate(async (id) => {
+      const lib = (window as any).__maquette.library;
+      const exp = await lib.call({ op: 'export', projectId: id });
+      const text = new TextDecoder().decode(new Uint8Array(await exp.file.arrayBuffer()));
+      const imp = await lib.call({ op: 'import', file: exp.file });
+      return { hasJournal: text.includes('journal.bin'), bytes: exp.bytes, id: imp.projects[0].id };
+    }, imported.id);
+    await page.evaluate((id) => (window as any).__maquette.library.openProject(id), viaJournal.id);
+    const h2Imported = (await q(page)).hash;
+    r.journalPath = { hasJournal: viaJournal.hasJournal, bytes: viaJournal.bytes, hashMatches: h2Imported === h2 };
+    expect(viaJournal.hasJournal).toBe(true);
+    expect(h2Imported).toBe(h2);
+
+    // Damaged and foreign files are refused, and leave no project behind.
+    const before = await lib<{ total: number; withManifest: number }>(page, { op: 'debug-folders' });
+    const damaged = Buffer.from(bytes);
+    const pos = z.get('positions.bin')!.data;
+    damaged[pos.byteOffset - bytes.byteOffset + 100] ^= 0xff;
+    writeFileSync('test-results/prj5-damaged.maquette', damaged);
+    writeFileSync('test-results/prj5-foreign.maquette', 'v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n');
+    await page.getByRole('button', { name: 'Projects', exact: true }).click();
+    await page.locator('input[type=file][data-feature="PRJ-5"]').setInputFiles('test-results/prj5-damaged.maquette');
+    await expect(page.getByText(/checksum mismatch/)).toBeVisible();
+    await page.locator('input[type=file][data-feature="PRJ-5"]').setInputFiles('test-results/prj5-foreign.maquette');
+    await expect(page.getByText(/not a Maquette project or backup/)).toBeVisible();
+    const after = await lib<{ total: number; withManifest: number }>(page, { op: 'debug-folders' });
+    r.refused = { before, after };
+    expect(after).toEqual(before);
+    expect(after.total).toBe(after.withManifest);
+  } finally {
+    r.pageErrors = errors;
+    save('prj5-roundtrip', r);
+    await done();
+  }
+  expect(errors).toEqual([]);
+});
