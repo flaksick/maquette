@@ -1,20 +1,9 @@
 // Generates SPEC.md from spec.yaml and validates the registry. Prints the counts it wrote.
 // Usage: node scripts/gen-spec.mjs [--check]   (--check fails if SPEC.md is stale)
 import { readFileSync, writeFileSync } from 'node:fs';
-import { parse } from 'yaml';
+import { loadSpec } from './spec.mjs';
 
-const spec = parse(readFileSync('spec.yaml', 'utf8'));
-const errors = [];
-const ids = new Set();
-for (const f of spec.features) {
-  if (ids.has(f.id)) errors.push(`duplicate id ${f.id}`);
-  ids.add(f.id);
-  const area = f.id.split('-')[0];
-  if (!spec.areas[area]) errors.push(`${f.id}: unknown area ${area}`);
-  if (!['D', 'R', 'N'].includes(f.tier)) errors.push(`${f.id}: bad tier ${f.tier}`);
-  if (!spec.phases.includes(f.phase)) errors.push(`${f.id}: bad phase ${f.phase}`);
-  for (const k of ['name', 'done_when', 'test']) if (!f[k]) errors.push(`${f.id}: missing ${k}`);
-}
+const { spec, errors } = loadSpec();
 if (errors.length) {
   console.error(errors.join('\n'));
   process.exit(1);
@@ -34,6 +23,7 @@ const lines = [
   '',
   `**${spec.features.length} features** @ spec.yaml: ${byTier.D} daily, ${byTier.R} regular, ${byTier.N} niche.`,
   `First-ship phase counts @ spec.yaml: ${spec.phases.map((p) => `${p} ${byPhase[p]}`).join(', ')}.`,
+  `Current phase @ spec.yaml: **${spec.current_phase}** (controls may only render for features of this phase or earlier).`,
   'Status is computed from tagged test results and device reports (`npm run verify`), never written here.',
   '',
   '**Universal gates:** ' + spec.universal_gates.join('; ') + '.',

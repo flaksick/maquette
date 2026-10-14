@@ -12,6 +12,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "spec": "node scripts/gen-spec.mjs",
     "verify": "node scripts/verify.mjs",
+    "status": "node scripts/feature-status.mjs",
+    "check-ui": "node scripts/check-ui.mjs",
     "deploy:dev": "node scripts/deploy.mjs dev",
     "app:dev": "vite --config vite.app.config.ts --mode dev --host",
     "app:build": "npm run icons && npm run core && vite build --config vite.app.config.ts --mode dev && vite build --config vite.app.config.ts --mode prod"
