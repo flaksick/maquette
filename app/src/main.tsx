@@ -74,6 +74,7 @@ function onEngine(m: FromEngine): void {
   switch (m.type) {
     case 'ready':
       ui.ready.value = true;
+      onResize(); // the layout may have changed while the engine was starting
       ui.stats.value = m.stats;
       ui.simd.value = m.simd;
       ui.recovered.value = m.recovered;
@@ -128,6 +129,19 @@ bus.query = query;
 render(<App />, document.getElementById('root')!);
 startEngine();
 void registerServiceWorker();
-window.addEventListener('resize', onResize);
+// The canvas backing store must track the viewport's real size. Window 'resize' isn't enough:
+// in a Home Screen app the status bar / safe-area layout settles after launch without one,
+// which left the scene stretched. A ResizeObserver sees every layout change.
+let resizeQueued = 0;
+const queueResize = () => {
+  if (resizeQueued) return;
+  resizeQueued = requestAnimationFrame(() => {
+    resizeQueued = 0;
+    onResize();
+  });
+};
+new ResizeObserver(queueResize).observe(document.getElementById('viewport')!);
+window.addEventListener('resize', queueResize);
+window.addEventListener('orientationchange', queueResize);
 document.addEventListener('visibilitychange', () => send({ type: document.visibilityState === 'visible' ? 'visible' : 'hidden' }));
 (window as unknown as { __maquette: unknown }).__maquette = { ui, query, send, input: input.stats };

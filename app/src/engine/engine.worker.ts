@@ -107,10 +107,28 @@ function frame(): void {
   renderer.draw(cam, ring());
   const mb = (core.mem().byteLength + renderer.gpuBytes) / 2 ** 20;
   highWaterMB = Math.max(highWaterMB, mb);
+  postStats(false);
+}
+
+let statsTimer: ReturnType<typeof setTimeout> | null = null;
+/** Stats drive the undo/redo buttons and the HUD. Throttled during strokes, but a trailing post
+ *  always follows: rendering stops when idle (invariant 10), so a frame-only post left the UI
+ *  stale (Undo greyed out right after a stroke — found by the 2026-10-14 glitch pass). */
+function postStats(force: boolean): void {
   const now = performance.now();
-  if (now - lastStatsPost > 250) {
+  if (force || now - lastStatsPost > 250) {
     lastStatsPost = now;
+    if (statsTimer) {
+      clearTimeout(statsTimer);
+      statsTimer = null;
+    }
     post({ type: 'stats', stats: stats() });
+  } else if (!statsTimer) {
+    statsTimer = setTimeout(() => {
+      statsTimer = null;
+      lastStatsPost = performance.now();
+      post({ type: 'stats', stats: stats() });
+    }, 260 - (now - lastStatsPost));
   }
 }
 
@@ -174,10 +192,12 @@ function journal(len: number): void {
   if (!storageOk) return;
   const t0 = performance.now();
   journalBytes += len;
+  postStats(true);
   void call({ type: 'journal', seq, bytes }, [bytes]).then((r) => {
     if (!r.ok) return storageFailed(r.error);
     lastAcked = Math.max(lastAcked, seq);
     post({ type: 'saved', seq, latencyMs: Math.round(performance.now() - t0) });
+    postStats(true);
   });
   if (journalBytes > JOURNAL_FORCE_BYTES) void checkpoint();
   else scheduleCheckpoint();
@@ -220,7 +240,7 @@ async function checkpoint(): Promise<void> {
     return storageFailed(res.error);
   }
   journalBytes = 0;
-  requestFrame(); // stats refresh
+  postStats(true);
 }
 
 function storageFailed(error?: string): void {
@@ -349,6 +369,10 @@ async function init(m: Extract<ToEngine, { type: 'init' }>): Promise<void> {
     await createSphere(DEFAULT_SPHERE);
     recovered.project = 'New sphere';
   }
+  if (pendingSize) {
+    resize(pendingSize.width, pendingSize.height, pendingSize.dpr);
+    pendingSize = null;
+  }
   setBrush(brush);
   renderer.uploadAll(core);
   requestFrame();
@@ -378,10 +402,17 @@ function hitOrPlane(xCss: number, yCss: number): V3 {
 }
 
 // ---------- messages ----------
+let pendingSize: { width: number; height: number; dpr: number } | null = null;
+
 scope.onmessage = async (e: MessageEvent<ToEngine>) => {
   const m = e.data;
   if (m.type === 'init') return init(m);
-  if (!core) return;
+  if (!core || !renderer) {
+    // Still starting: keep the latest size instead of dropping it (a dropped resize = a
+    // stretched scene until the next one).
+    if (m.type === 'resize') pendingSize = { width: m.width, height: m.height, dpr: m.dpr };
+    return;
+  }
   switch (m.type) {
     case 'resize':
       resize(m.width, m.height, m.dpr);

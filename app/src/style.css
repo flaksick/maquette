@@ -252,9 +252,15 @@ button.primary {
 .row input[type='range'] {
   flex: 1;
 }
+.row.toggle {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
 .toggle input {
+  flex: none;
   width: 22px;
   height: 22px;
+  margin: 0;
 }
 .dim {
   color: var(--dim);
