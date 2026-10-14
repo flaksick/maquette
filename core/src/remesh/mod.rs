@@ -28,6 +28,7 @@
 //!
 //! Mask and color reprojection: N/A until mask (MSK-1) and color (PNT-1) attributes exist.
 
+pub mod abi;
 mod build;
 mod cpbvh;
 mod lut;
