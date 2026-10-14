@@ -59,7 +59,36 @@ export type ToEngine =
   | { type: 'visible' }
   | { type: 'hidden' }
   | { type: 'debug-trap' }
-  | { type: 'query' };
+  | { type: 'query' }
+  | { type: 'remesh'; cmd: RemeshCmd };
+
+/** TOP-1 voxel remesh: one envelope each way (engine.worker.ts "TOP-1 remesh" block). */
+export type RemeshCmd =
+  | { op: 'estimate'; target: number; keepSharp: boolean }
+  | { op: 'start'; target: number; keepSharp: boolean }
+  | { op: 'cancel' }
+  | { op: 'validate' };
+
+export interface RemeshEstimate {
+  target: number;
+  quads: number;
+  voxel: number;
+  steadyMB: number;
+  transientMB: number;
+  peakMB: number;
+  budgetMB: number;
+  undoMB: number;
+  undoable: boolean;
+  fits: boolean;
+}
+
+export type RemeshEvent =
+  | { kind: 'estimate'; est: RemeshEstimate }
+  | { kind: 'progress'; progress: number; stage: string }
+  | { kind: 'done'; quads: number; verts: number; tris: number; ms: number; slices: number; maxSliceMs: number; undoable: boolean; peakMB: number }
+  | { kind: 'cancelled' }
+  | { kind: 'refused'; text: string }
+  | { kind: 'validate'; boundaryEdges: number; nonManifoldEdges: number; inconsistentEdges: number; nonManifoldVerts: number; components: number; euler: number };
 
 /** Engine -> main. */
 export type FromEngine =
@@ -72,7 +101,8 @@ export type FromEngine =
   | { type: 'refused'; text: string }
   | { type: 'state'; brush?: BrushState }
   | { type: 'fatal'; error: string }
-  | { type: 'query-result'; hash: string; stats: Stats; storageOk: boolean };
+  | { type: 'query-result'; hash: string; stats: Stats; storageOk: boolean }
+  | { type: 'remesh'; ev: RemeshEvent };
 
 export interface RecoveryInfo {
   project: string;
@@ -92,7 +122,8 @@ export type ToPersist =
   | { id: number; type: 'session-start' }
   | { id: number; type: 'session-beat'; highWaterMB: number; seq: number }
   | { id: number; type: 'session-end' }
-  | { id: number; type: 'estimate' };
+  | { id: number; type: 'estimate' }
+  | { id: number; type: 'replace-mesh'; topo: ArrayBuffer; positions: ArrayBuffer; seq: number };
 
 export interface OpenResult {
   status: 'none' | 'ok';

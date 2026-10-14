@@ -10,6 +10,7 @@
 // flips the manifest slot, then deletes the old segment. Recovery replays every segment at or
 // after the manifest's journalGen; records are absolute leaf states, so replay is idempotent.
 import { STORAGE_ROOT, type OpenResult, type PersistReply, type ToPersist } from '../shared/protocol';
+import { positionsFileOf, replaceMesh, topoFileOf } from './replace';
 
 interface SyncHandle {
   read(buffer: ArrayBufferView, options?: { at?: number }): number;
@@ -29,6 +30,9 @@ interface Manifest {
   gen: number;
   checkpointSeq: number;
   journalGen: number;
+  /** Data file names (TOP-1 replace-mesh); absent = topo.bin / positions.bin. */
+  topoFile?: string;
+  positionsFile?: string;
   crc?: number;
 }
 
@@ -172,7 +176,7 @@ async function closeCurrent(): Promise<void> {
 async function attach(id: string, dir: FileSystemDirectoryHandle, manifest: Manifest, appendGen: number): Promise<void> {
   await closeCurrent();
   const journal = await openHandle(dir, `journal-${appendGen}.bin`);
-  const positions = await openHandle(dir, 'positions.bin');
+  const positions = await openHandle(dir, positionsFileOf(manifest));
   cur = { id, dir, manifest, appendGen, journal, journalOffset: journal.getSize(), positions };
   await writeWhole(await root(), 'index.json', enc.encode(JSON.stringify({ lastProject: id })));
 }
@@ -188,8 +192,8 @@ async function openLast(): Promise<OpenResult> {
   }
   const manifest = await loadManifest(dir);
   if (!manifest) return { status: 'none' };
-  const topo = await readFile(dir, 'topo.bin');
-  const positions = await readFile(dir, 'positions.bin');
+  const topo = await readFile(dir, topoFileOf(manifest));
+  const positions = await readFile(dir, positionsFileOf(manifest));
   if (!topo || !positions) return { status: 'none' };
   // Every journal segment at or after the manifest's generation, in order.
   const segs: number[] = [];
@@ -387,6 +391,11 @@ async function handle(m: ToPersist): Promise<void> {
         await sessionEnd();
         reply({ id: m.id, ok: true });
         break;
+      case 'replace-mesh':
+        if (!cur) throw new Error('no open project');
+        await replaceMesh(cur, { writeWhole, openHandle, writeManifest }, m.topo, m.positions, m.seq);
+        reply({ id: m.id, ok: true, value: { seq: m.seq } });
+        break;
       case 'estimate': {
         const est = await navigator.storage.estimate();
         const persisted = await navigator.storage.persisted();
@@ -423,7 +432,8 @@ self.onmessage = (e: MessageEvent<{ type: 'connect'; port: MessagePort; channel:
   channel = e.data.channel;
   port = e.data.port;
   port.onmessage = (ev: MessageEvent<ToPersist>) => {
-    (ev.data.type === 'journal' ? journalQ : otherQ).push(ev.data);
+    // replace-mesh rides the journal queue: records after it belong to the new topology.
+    (ev.data.type === 'journal' || ev.data.type === 'replace-mesh' ? journalQ : otherQ).push(ev.data);
     void pump();
   };
 };

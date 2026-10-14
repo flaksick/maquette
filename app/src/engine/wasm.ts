@@ -45,6 +45,23 @@ export interface Exports {
   eng_bounds_ptr(): number;
   eng_set_history(budgetMB: number, maxSteps: number): void;
   eng_debug_trap(): void;
+  // TOP-1 remesh (core/src/remesh/abi.rs)
+  eng_remesh_nums_ptr(): number;
+  eng_remesh_estimate(target: number, keepSharp: number): number;
+  eng_remesh_begin(target: number, keepSharp: number, leafMax: number): number;
+  eng_remesh_step(units: number): number;
+  eng_remesh_progress(): number;
+  eng_remesh_stage(): number;
+  eng_remesh_cancel(): void;
+  eng_remesh_finish(): number;
+  eng_heavy_topo_ptr(): number;
+  eng_heavy_topo_release(): void;
+  eng_heavy_undo(): number;
+  eng_heavy_redo(): number;
+  eng_heavy_edit(): void;
+  eng_heavy_reset(): void;
+  eng_heavy_depths(out: number): void;
+  eng_validate(out: number): number;
 }
 
 export class Core {
