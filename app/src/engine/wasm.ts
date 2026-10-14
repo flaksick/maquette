@@ -45,6 +45,10 @@ export interface Exports {
   eng_bounds_ptr(): number;
   eng_set_history(budgetMB: number, maxSteps: number): void;
   eng_debug_trap(): void;
+  // [io] core/src/io/abi.rs (IMP-0/1/2, EXP-2)
+  eng_import(ptr: number, len: number, hint: number, leafMax: number): number;
+  eng_export_stl(scale: number, info: number): number;
+  eng_mesh_check(out: number): number;
 }
 
 export class Core {

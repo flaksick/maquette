@@ -11,6 +11,7 @@ import { InputController } from './input';
 import { registerServiceWorker } from './sw-client';
 import { call, connectLibrary, onEngineMessage, openProject, refreshProjects, watchStorage } from './projects';
 import { loadPrefs, onProjectOpened, prefs, savePrefsNow, setPref } from './prefs';
+import { io, ioMessage } from './io-ui';
 import type { FromEngine, ToEngine } from './shared/protocol';
 
 
@@ -78,6 +79,7 @@ function restartEngine(error: string): void {
 
 function onEngine(m: FromEngine): void {
   onEngineMessage(m); // projects / storage / disk state (P1b)
+  ioMessage(m); // [io] import report, units, STL export details
   switch (m.type) {
     case 'project':
       if (m.error) ui.notice.value = { level: 'warn', text: m.error };
@@ -109,7 +111,7 @@ function onEngine(m: FromEngine): void {
       ui.notice.value = { level: 'warn', text: m.text };
       break;
     case 'export-ready':
-      ui.exportFile.value = { name: m.name, file: new File([m.bytes], m.name, { type: 'text/plain' }), faces: m.faces, verts: m.verts };
+      ui.exportFile.value = { name: m.name, file: new File([m.bytes], m.name, { type: m.mime ?? 'text/plain' }), faces: m.faces, verts: m.verts };
       break;
     case 'fatal':
       restartEngine(m.error);
@@ -161,6 +163,7 @@ document.addEventListener('visibilitychange', () => send({ type: document.visibi
   send,
   input: input.stats,
   sheets: SHEETS,
+  io,
   // P1b test and diagnostics hooks: the library (persist worker) and preferences.
   library: { call, refreshProjects, openProject, prefs: () => prefs.value, setPref, savePrefsNow },
 };
