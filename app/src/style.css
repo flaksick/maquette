@@ -112,20 +112,79 @@ button.primary {
   position: absolute;
   left: 12px;
   top: 12px;
+  width: 160px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   z-index: 1;
 }
+/* 14 tools in two columns: 7 rows of 40 px fit beside the brush panel on an iPad Air in either
+   orientation (1180x820 and 820x1180). */
+.palette {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
 .tool {
-  width: 84px;
-  min-height: 52px;
+  min-height: 40px;
+  padding: 4px 6px;
+  font-size: 13px;
+  line-height: 1.15;
   background: var(--panel);
   backdrop-filter: blur(8px);
 }
+.brushopts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  backdrop-filter: blur(8px);
+  font-size: 12px;
+  color: var(--dim);
+}
+.brushopts label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.brushopts label.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+.brushopts select,
+.brushopts input[type='range'] {
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+}
+.brushopts select {
+  min-height: 32px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.brushopts input[type='checkbox'] {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+}
+.axes {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.axes button {
+  flex: 1;
+  min-height: 32px;
+  padding: 2px 0;
+}
 .sliders {
   position: absolute;
-  left: 108px;
+  left: 184px;
   top: 12px;
   display: flex;
   gap: 10px;
@@ -278,9 +337,6 @@ pre.diag {
 .sheet.wide {
   width: min(880px, 94vw);
 }
-.warn-text {
-  color: #e5c07b;
-}
 button.danger {
   background: #6b2a24;
   border-color: var(--bad);
@@ -394,4 +450,43 @@ input.rename {
 .top button {
   white-space: nowrap;
   padding: 8px 10px;
+}
+/* ---------- [io] import, units, export format (IMP-0/1, PRJ-9, EXP-2) ---------- */
+.hidden-input {
+  display: none;
+}
+.segmented {
+  display: inline-flex;
+  gap: 4px;
+}
+.segmented button {
+  min-width: 56px;
+}
+table.counts {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+table.counts td {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+table.counts td:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.warn-text {
+  color: #d9b06a;
+}
+.budget {
+  border-top: 1px solid var(--line);
+  margin-top: 10px;
+  padding-top: 4px;
+}
+.budget h3 {
+  font-size: 15px;
+  margin: 6px 0 4px;
+}
+.budget p {
+  margin: 4px 0;
 }

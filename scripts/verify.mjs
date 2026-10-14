@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { computeStatus, gather, printStatus } from './feature-status.mjs';
+import { computeStatus, gather, printStatus, splitByPhase, writeStatusJson } from './feature-status.mjs';
 import { assembleProd } from './release.mjs';
 
 const rows = [];
@@ -206,9 +206,60 @@ else {
   }
 }
 
-// 12. No fake UI (invariant 7): every control carries a feature ID of this phase or earlier
+// ----- [io] Blender oracle (EXP-2) on the STL tests/io.spec.ts just exported (io stream's block) -----
 {
-  const r = sh(`node scripts/check-ui.mjs --tree ${TREE} --port ${PORT} --json test-results/ui-registry.json`);
+  const stl = 'test-results/export.stl';
+  rmSync('test-results/oracle-stl.json', { force: true });
+  const want = 'tris + positions exact, bbox <= 1e-4';
+  if (!existsSync(BLENDER)) rec('Blender oracle (EXP-2)', 'Blender not installed', want, null);
+  else if (!existsSync(stl) || statSync(stl).mtimeMs < e2eStart) rec('Blender oracle (EXP-2)', 'no fresh STL export (e2e skipped?)', want, null);
+  else {
+    const r = sh(`"${BLENDER}" --background --factory-startup --python oracle/check_stl.py -- ${stl} 2>&1`);
+    const line = r.stdout.split('\n').find((l) => l.startsWith('ORACLE '));
+    const o = line ? JSON.parse(line.slice(7)) : null;
+    if (o) writeFileSync('test-results/oracle-stl.json', JSON.stringify({ ...o, stl }, null, 1));
+    rec(
+      'Blender oracle (EXP-2)',
+      o ? `tris ${o.blender.faces}/${o.file.triangles} v ${o.blender.vertices}/${o.file.unique_positions} Δ ${o.bbox_max_delta?.toExponential(1)}` : 'no ORACLE line',
+      want,
+      !!o?.pass,
+      o ? `Blender ${o.blender.version}; boundary edges ${o.blender.boundary_edges}` : r.stdout.trim().split('\n').slice(-2).join(' | '),
+    );
+  }
+}
+// ----- [io] end -----
+
+// 12. Feature status, computed from the tagged tests above and fresh device reports. Runs before
+// the UI check: a control for a later-phase feature is allowed only when this says PASS.
+let status = null;
+{
+  try {
+    writeFileSync('test-results/rust-tests.txt', rustText);
+    const g = gather({ rustText });
+    const all = computeStatus({ ...g, all: true });
+    writeStatusJson('test-results/feature-status.json', g.spec, all);
+    const { upTo, later } = splitByPhase(g.spec, all);
+    status = { g, upTo, later };
+    const c = (s) => upTo.filter((r) => r.status === s).length;
+    const laterPass = later.filter((r) => r.status === 'PASS').length;
+    const laterFail = later.filter((r) => r.status === 'FAIL').length;
+    rec(
+      `Feature status (<= ${g.spec.current_phase})`,
+      `${c('PASS')} PASS · ${c('FAIL')} FAIL · ${c('device-pending')} device-pending · ${c('no-evidence')} none`,
+      '0 FAIL',
+      c('FAIL') === 0 && laterFail === 0,
+      `later phases: ${laterPass} PASS, ${laterFail} FAIL${g.playwrightRan ? '' : '; no e2e evidence (skipped)'}`,
+    );
+  } catch (e) {
+    rec('Feature status', String(e.message ?? e).slice(0, 60), '0 FAIL', false);
+  }
+}
+
+// 13. No fake UI (invariant 7): every control carries a feature ID of this phase or earlier, or of
+// a later phase that already has PASS evidence
+{
+  const st = existsSync('test-results/feature-status.json') ? '--status test-results/feature-status.json' : '';
+  const r = sh(`node scripts/check-ui.mjs --tree ${TREE} --port ${PORT} --json test-results/ui-registry.json ${st}`);
   const u = readJson('test-results/ui-registry.json');
   const t = u?.totals;
   rec(
@@ -216,31 +267,12 @@ else {
     t && r.status !== 2 ? `${t.untagged} untagged of ${t.interactive} in ${t.states} states` : 'check did not run',
     '0 untagged, 0 bad IDs',
     r.status === 0,
-    t ? `unknown IDs ${t.unknown}, after ${u.currentPhase} ${t.future}, bad data-ui ${t.badChrome}; ${t.featureIds} feature IDs rendered` : (r.stderr || r.stdout).trim().split('\n').pop(),
+    t
+      ? `unknown IDs ${t.unknown}; after ${u.currentPhase}: ${t.early} allowed by PASS evidence, ${t.future} without; bad data-ui ${t.badChrome}; ${t.featureIds} feature IDs rendered`
+      : (r.stderr || r.stdout).trim().split('\n').pop(),
   );
 }
 rmSync(TREE, { recursive: true, force: true });
-
-// 13. Feature status, computed from the tagged tests above and fresh device reports
-let status = null;
-{
-  try {
-    writeFileSync('test-results/rust-tests.txt', rustText);
-    const g = gather({ rustText });
-    const fs = computeStatus(g);
-    status = { g, fs };
-    const c = (s) => fs.filter((r) => r.status === s).length;
-    rec(
-      `Feature status (<= ${g.spec.current_phase})`,
-      `${c('PASS')} PASS · ${c('FAIL')} FAIL · ${c('device-pending')} device-pending · ${c('no-evidence')} none`,
-      '0 FAIL',
-      c('FAIL') === 0,
-      g.playwrightRan ? '' : 'no e2e evidence (skipped)',
-    );
-  } catch (e) {
-    rec('Feature status', String(e.message ?? e).slice(0, 60), '0 FAIL', false);
-  }
-}
 
 // 14. Device report freshness (required from P1a on; informational until device runs are routine)
 {
@@ -254,7 +286,7 @@ let status = null;
   }
 }
 
-if (status) printStatus(status.g.spec, status.fs);
+if (status) printStatus(status.g.spec, status.upTo, status.later);
 const w = (s, n) => String(s).padEnd(n).slice(0, n);
 console.log(`\n${w('#', 3)} ${w('condition', 40)} ${w('measured', 52)} ${w('threshold', 26)} status`);
 for (const r of rows) {

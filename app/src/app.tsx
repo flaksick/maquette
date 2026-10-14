@@ -5,17 +5,38 @@ import { ui } from './state';
 import { bus } from './bus';
 import { offline, updateWaiting, autoUpdate, setAutoUpdate, checkForUpdate } from './sw-client';
 import BalloonWorker from './balloon.worker?worker';
-import type { ToolName } from './shared/protocol';
+import { FALLOFFS, type FalloffName, type ToolName } from './shared/protocol';
 import { BUDGET, CHANNEL } from './config';
 import { Sheet } from './sheet';
 import { ProjectsSheet } from './gallery';
 import { DiskBanner, GestureCard, StorageSettings } from './safety';
+import { ExportFormat, ImportButton, ImportSheet, requestExport } from './io-ui'; // [io]
+import { budget, benchRun, stressRun, runBench, startStressTest, markKillTest, deviceFeatures } from './budget-client';
+import { budgetSource, ceilingSource, fmtMB, fmtTris, shortSource, APP_BYTES_PER_TRI } from './budget';
 
 const TOOLS: { id: ToolName; label: string; feature: string }[] = [
   { id: 'draw', label: 'Draw', feature: 'BRS-1' },
   { id: 'smooth', label: 'Smooth', feature: 'BRS-2' },
   { id: 'grab', label: 'Grab', feature: 'BRS-3' },
+  { id: 'inflate', label: 'Inflate', feature: 'BRS-4' },
+  { id: 'flatten', label: 'Flatten', feature: 'BRS-5' },
+  { id: 'clay', label: 'Clay', feature: 'BRS-6' },
+  { id: 'clay-strips', label: 'Clay Strips', feature: 'BRS-6' },
+  { id: 'crease', label: 'Crease', feature: 'BRS-7' },
+  { id: 'pinch', label: 'Pinch', feature: 'BRS-8' },
+  { id: 'snake-hook', label: 'Snake Hook', feature: 'BRS-9' },
+  { id: 'layer', label: 'Layer', feature: 'BRS-10' },
+  { id: 'fill', label: 'Fill', feature: 'BRS-11' },
+  { id: 'scrape', label: 'Scrape', feature: 'BRS-11' },
+  { id: 'planar', label: 'Planar', feature: 'BRS-11' },
 ];
+const FALLOFF_LABEL: Record<FalloffName, string> = {
+  smooth: 'Smooth', smoother: 'Smoother', sphere: 'Sphere', root: 'Root', sharp: 'Sharp',
+  linear: 'Linear', pow4: 'Pow 4', invsquare: 'Inverse square', constant: 'Constant',
+};
+/** Tools whose engine dab ignores these settings (so the panel hides them: no fake UI). */
+const NO_ACCUMULATE: ToolName[] = ['smooth', 'grab', 'snake-hook', 'layer'];
+const NO_AUTOSMOOTH: ToolName[] = ['smooth', 'grab'];
 
 const fmt = (n: number) => n.toLocaleString('en-US');
 
@@ -47,22 +68,12 @@ function TopBar() {
         </button>
       </div>
       <div class="group">
-        <button
-          data-feature="SYM-1"
-          class={ui.symmetry.value ? 'on' : ''}
-          aria-pressed={ui.symmetry.value}
-          onClick={() => {
-            ui.symmetry.value = !ui.symmetry.value;
-            ui.pushBrush();
-          }}
-        >
-          Mirror X
-        </button>
         <button data-feature="PRM-1" onClick={() => (ui.sheet.value = 'new')}>New</button>
+        <ImportButton />
         <button data-feature="EXP-7" onClick={() => {
           ui.exportFile.value = null;
           ui.sheet.value = 'export';
-          bus.send({ type: 'export-obj' });
+          requestExport(); // [io] OBJ or STL, whichever the sheet shows
         }}>Export</button>
         <button data-feature="PLT-9" onClick={() => (ui.sheet.value = 'settings')}>Settings</button>
       </div>
@@ -77,12 +88,73 @@ function TopBar() {
 function Tools() {
   return (
     <nav class="tools">
-      {TOOLS.map((t) => (
-        <button key={t.id} data-feature={t.feature} class={ui.tool.value === t.id ? 'tool on' : 'tool'} onClick={() => ui.setTool(t.id)}>
-          {t.label}
-        </button>
-      ))}
+      <div class="palette">
+        {TOOLS.map((t) => (
+          <button key={t.id} data-feature={t.feature} data-tool={t.id} class={ui.tool.value === t.id ? 'tool on' : 'tool'} onClick={() => ui.setTool(t.id)}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <BrushPanel />
     </nav>
+  );
+}
+
+/** Falloff, hardness (STK-4), auto-smooth and accumulate (STK-11) of the current tool, and the
+ *  mirror axes (SYM-1). */
+function BrushPanel() {
+  const t = ui.tool.value;
+  const s = ui.tools.value[t];
+  const axes = [
+    ['X', ui.symmetry],
+    ['Y', ui.symmetryY],
+    ['Z', ui.symmetryZ],
+  ] as const;
+  return (
+    <div class="brushopts">
+      <label>
+        Falloff
+        <select data-feature="STK-4" value={s.falloff} onChange={(e) => ui.setToolSetting({ falloff: (e.target as HTMLSelectElement).value as FalloffName })}>
+          {FALLOFFS.map((f) => (
+            <option key={f} value={f}>{FALLOFF_LABEL[f]}</option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Hardness {Math.round(s.hardness * 100)}%
+        <input type="range" data-feature="STK-4" min={0} max={1} step={0.05} value={s.hardness} onInput={(e) => ui.setToolSetting({ hardness: Number((e.target as HTMLInputElement).value) })} />
+      </label>
+      {!NO_AUTOSMOOTH.includes(t) && (
+        <label>
+          Auto-smooth {Math.round(s.autosmooth * 100)}%
+          <input type="range" data-feature="STK-11" min={0} max={1} step={0.05} value={s.autosmooth} onInput={(e) => ui.setToolSetting({ autosmooth: Number((e.target as HTMLInputElement).value) })} />
+        </label>
+      )}
+      {!NO_ACCUMULATE.includes(t) && (
+        <label class="check">
+          <input type="checkbox" data-feature="STK-11" checked={s.accumulate} onChange={(e) => ui.setToolSetting({ accumulate: (e.target as HTMLInputElement).checked })} />
+          Accumulate
+        </label>
+      )}
+      <div class="axes">
+        Mirror
+        {axes.map(([name, sig]) => (
+          <button
+            key={name}
+            data-feature="SYM-1"
+            class={sig.value ? 'on' : ''}
+            aria-pressed={sig.value}
+            aria-label={`Mirror ${name}`}
+            onClick={() => {
+              sig.value = !sig.value;
+              ui.pushBrush();
+            }}
+          >
+            {name}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -133,9 +205,10 @@ function Hud() {
   const st = ui.stats.value;
   if (!st) return null;
   const used = st.wasmMiB + st.gpuMiB;
+  const b = budget.value;
   return (
     <div class="hud" data-feature="TOP-8">
-      {fmt(st.tris)} tris · {fmt(st.verts)} verts · memory {fmt(used)} / {fmt(BUDGET.mb)} MB
+      {fmt(st.tris)} tris · {fmt(st.verts)} verts · memory {fmt(used)} / {fmt(b.budgetMB)} MB <span class="dim" title={budgetSource(b)}>({shortSource(b)})</span>
     </div>
   );
 }
@@ -152,8 +225,10 @@ function ViewButtons() {
 function NewSheet() {
   const [n, setN] = useState(96);
   const tris = 12 * n * n;
-  const needMB = Math.round(((6 * n * n + 2) * 170) / 2 ** 20);
-  const fits = needMB <= BUDGET.mb;
+  const needMB = Math.round((tris * APP_BYTES_PER_TRI) / 2 ** 20);
+  const b = budget.value;
+  const fits = needMB <= b.budgetMB; // the engine re-checks with steady memory (PLT-8 pre-flight)
+  const comfy = b.bench?.comfortableTris ?? 0;
   return (
     <Sheet title="New sphere">
       <p class="dim">An all-quad sphere. The current sculpt stays saved on this iPad.</p>
@@ -162,8 +237,14 @@ function NewSheet() {
         <input type="range" min={8} max={512} step={8} value={n} onInput={(e) => setN(Number((e.target as HTMLInputElement).value))} data-feature="PRM-1" />
       </label>
       <p>
-        {fmt(tris)} triangles · about {fmt(needMB)} MB {fits ? '' : `· over this iPad's ${fmt(BUDGET.mb)} MB budget`}
+        {fmt(tris)} triangles · about {fmt(needMB)} MB of a {fmt(b.budgetMB)} MB budget ({budgetSource(b)})
+        {fits ? '' : ` · over this iPad's budget`}
       </p>
+      {comfy > 0 && tris > comfy && (
+        <p class="dim" data-feature="PLT-8">
+          Above this iPad's comfortable {fmtTris(comfy)} triangles (speed test): brushes may lag.
+        </p>
+      )}
       <button class="primary" data-feature="PRM-1" disabled={!fits} onClick={() => {
         bus.send({ type: 'new-sphere', n });
         ui.sheet.value = 'none';
@@ -202,7 +283,8 @@ function ExportSheet() {
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
   };
   return (
-    <Sheet title="Export OBJ">
+    <Sheet title="Export">
+      <ExportFormat />
       {!f ? (
         <p>Preparing…</p>
       ) : (
@@ -253,10 +335,65 @@ function SettingsSheet() {
       {updateWaiting.value && <p class="ok-text">An update is ready. It applies the next time you open Maquette.</p>}
       <StorageSettings />
       <p class="dim">Undo history clears when Maquette closes; your sculpt itself is saved after every stroke.</p>
+      <BudgetSection />
       <p class="dim">
-        Version {offline.value.version ?? 'dev'} · engine {ui.simd.value ? 'SIMD' : 'scalar'} · memory budget {fmt(BUDGET.mb)} MB ({BUDGET.source})
+        Version {offline.value.version ?? 'dev'} · engine {ui.simd.value ? 'SIMD' : 'scalar'}
       </p>
       <button data-feature="PLT-9" onClick={() => (ui.sheet.value = 'diag')}>Diagnostics…</button>
+    </Sheet>
+  );
+}
+
+// ---------- PLT-8 device budgets: every limit with its source ----------
+function BudgetSection() {
+  const b = budget.value;
+  const bench = b.bench;
+  const big = bench?.sizes[bench.sizes.length - 1];
+  const last = b.changes[b.changes.length - 1];
+  return (
+    <div class="budget" data-feature="PLT-8">
+      <h3>Memory and speed on this iPad</h3>
+      <p>
+        Budget <b>{fmtMB(b.budgetMB)}</b> · {budgetSource(b)}
+      </p>
+      <p class="dim">
+        Ceiling {fmtMB(b.ceilingMB)} · {ceilingSource(b)}; learning never goes above it
+      </p>
+      <p class="dim">
+        {bench
+          ? `Comfortable ${fmtTris(bench.comfortableTris)} triangles · speed test ${bench.t.slice(0, 10)}: ${big ? `${big.frameMs.p95} ms per brush frame at ${fmtTris(big.tris)} (p95, target ${bench.targetMs} ms)` : ''}${bench.limitedBy === 'memory' ? '; limited by memory' : ''}`
+          : 'Comfortable polycount: not measured yet (the 10-second speed test runs once while Maquette is idle).'}
+      </p>
+      {last && <p class="dim">Last change {last.t.slice(0, 10)}: {fmtMB(last.fromMB)} → {fmtMB(last.toMB)} ({last.reason}).</p>}
+      {benchRun.value.note && <p class="dim">{benchRun.value.note}</p>}
+      <div class="row">
+        <button data-feature="PLT-8" disabled={benchRun.value.running} onClick={() => void runBench()}>
+          {benchRun.value.running ? 'Measuring…' : bench ? 'Measure speed again' : 'Measure speed (10 s)'}
+        </button>
+        <button data-feature="PLT-8" onClick={() => (ui.sheet.value = 'stress')}>Stress-test this iPad…</button>
+      </div>
+    </div>
+  );
+}
+
+function StressSheet() {
+  const r = stressRun.value;
+  return (
+    <Sheet title="Stress-test this iPad">
+      <p>
+        <b>Maquette will close.</b> This fills memory on purpose until iPadOS shuts Maquette down, to measure what this iPad can
+        really hold. It takes up to a minute. Your sculpt is saved first and comes back when you reopen Maquette from the Home
+        Screen; the new budget is then 0.6 × what this iPad held.
+      </p>
+      <p class="dim">Current budget {fmtMB(budget.value.budgetMB)} ({budgetSource(budget.value)}).</p>
+      {r.running ? (
+        <p class="ok-text">{r.note}</p>
+      ) : (
+        <button class="primary" data-feature="PLT-8" onClick={() => void startStressTest()}>
+          Start the stress test
+        </button>
+      )}
+      {!r.running && r.note && <p class="dim">{r.note}</p>}
     </Sheet>
   );
 }
@@ -317,27 +454,32 @@ function DiagSheet() {
     }
     const q = await bus.query();
     writeLS(KILL_PENDING, { hash: q.hash, seq: st.seq, t: new Date().toISOString() });
+    await markKillTest(); // a deliberate exit: the budget learning ignores it (PLT-8)
     ui.notice.value = { level: 'warn', text: 'Kill test running: Maquette will fill memory until iOS closes it. Reopen it from the Home Screen.' };
     new BalloonWorker().postMessage({});
   };
   const share = async () => {
     const q = await bus.query();
+    const crashLog = (await readCrashLog()) as { entries?: { kind?: string }[] } | null;
+    const killTests = readLS<{ pass: boolean }[]>(KILL_RESULTS, []);
     const report = {
       generatedAt: new Date().toISOString(),
       userAgent: navigator.userAgent,
       screen: { w: screen.width, h: screen.height, dpr: devicePixelRatio },
       standalone: matchMedia('(display-mode: standalone)').matches,
       offline: offline.value,
-      budget: BUDGET,
+      budget: budget.value,
       stats: q.stats,
       hash: q.hash,
       storageOk: q.storageOk,
       recovered: ui.recovered.value,
       killTests: readLS(KILL_RESULTS, []),
       input: (window as unknown as { __maquette?: { input?: unknown } }).__maquette?.input ?? null,
-      crashLog: await readCrashLog(),
+      crashLog,
       estimate: await navigator.storage.estimate().catch(() => null),
       persisted: await navigator.storage.persisted().catch(() => null),
+      // What this device run demonstrates, feature by feature (scripts/feature-status.mjs).
+      features: deviceFeatures(killTests, crashLog),
     };
     const name = `maquette-report-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
     const file = new File([JSON.stringify(report, null, 1)], name, { type: 'application/json' });
@@ -405,6 +547,8 @@ export function App() {
       {sheet === 'settings' && <SettingsSheet />}
       {sheet === 'diag' && <DiagSheet />}
       {sheet === 'projects' && <ProjectsSheet />}
+      {sheet === 'import' && <ImportSheet />}
+      {sheet === 'stress' && <StressSheet />}
     </div>
   );
 }

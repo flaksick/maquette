@@ -13,6 +13,7 @@ export interface Exports {
   eng_new_sphere(n: number, leafMax: number): number;
   eng_load(topo: number, topoLen: number, pos: number, posLen: number): number;
   eng_set_brush(tool: number, radiusPx: number, strength: number, flags: number, gamma: number, spacing: number): void;
+  eng_set_brush_ext(falloff: number, hardness: number, autosmooth: number, flags: number): void;
   eng_camera_commit(): void;
   eng_stroke_begin(x: number, y: number, p: number): number;
   eng_stroke_move(n: number): number;
@@ -45,6 +46,10 @@ export interface Exports {
   eng_bounds_ptr(): number;
   eng_set_history(budgetMB: number, maxSteps: number): void;
   eng_debug_trap(): void;
+  // [io] core/src/io/abi.rs (IMP-0/1/2, EXP-2)
+  eng_import(ptr: number, len: number, hint: number, leafMax: number): number;
+  eng_export_stl(scale: number, info: number): number;
+  eng_mesh_check(out: number): number;
 }
 
 export class Core {

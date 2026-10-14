@@ -5,6 +5,7 @@ import { Core } from './wasm';
 import { Renderer } from './renderer';
 import { Camera, type V3 } from './camera';
 import {
+  FALLOFFS,
   TOOL_ID,
   type BrushState,
   type FromEngine,
@@ -14,8 +15,14 @@ import {
   type Stats,
   type ToEngine,
   type ToPersist,
+  type ImportReport,
+  type Units,
+  UNITS,
+  UNIT_TO_MM,
+  type SessionStartResult,
 } from '../shared/protocol';
 import { LOW_SPACE_BYTES } from '../shared/library';
+import { budgetMB, budgetSource, currentBudget, fits, fmtMB, setBudget } from '../budget';
 
 const DEFAULT_SPHERE = 96; // 110,592 triangles
 const LEAF = 1024;
@@ -35,7 +42,6 @@ let renderer: Renderer;
 const cam = new Camera();
 let dpr = 1;
 let persist: MessagePort;
-let budgetMB = 1459;
 let storageOk = true;
 let projectId = '';
 let brush: BrushState = { tool: 'draw', radiusPx: 40, strength: 0.5, pressureRadius: false, pressureStrength: true, gamma: 1, symmetryX: true };
@@ -51,6 +57,7 @@ let ckptInFlight = false;
 let highWaterMB = 0;
 let lastStatsPost = 0;
 let stateTimer: ReturnType<typeof setTimeout> | null = null;
+let units: Units = 'm'; // PRJ-9: what one unit means; saved with the view state, default metres
 
 const post = (m: FromEngine, t: Transferable[] = []) => scope.postMessage(m, t);
 
@@ -163,8 +170,10 @@ function commitCamera(): void {
 
 function setBrush(b: BrushState): void {
   brush = b;
-  const flags = (b.pressureRadius ? 1 : 0) | (b.pressureStrength ? 2 : 0) | (b.symmetryX ? 4 : 0) | 8;
-  core.x.eng_set_brush(TOOL_ID[b.tool], b.radiusPx * dpr, b.strength, flags, b.gamma, 0.1);
+  const flags = (b.pressureRadius ? 1 : 0) | (b.pressureStrength ? 2 : 0) | (b.symmetryX ? 4 : 0) | 8 | (b.symmetryY ? 16 : 0) | (b.symmetryZ ? 32 : 0);
+  core.x.eng_set_brush(TOOL_ID[b.tool] ?? 0, b.radiusPx * dpr, b.strength, flags, b.gamma, 0.1);
+  const falloff = Math.max(0, FALLOFFS.indexOf(b.falloff ?? 'smooth'));
+  core.x.eng_set_brush_ext(falloff, b.hardness ?? 0, b.autosmooth ?? 0, b.accumulate === false ? 0 : 1);
 }
 
 function frameView(reset: boolean): void {
@@ -177,15 +186,20 @@ function frameView(reset: boolean): void {
 }
 
 function stateJson(): string {
-  return JSON.stringify({ camera: { eye: cam.eye, yaw: cam.yaw, pitch: cam.pitch }, brush });
+  return JSON.stringify({ camera: { eye: cam.eye, yaw: cam.yaw, pitch: cam.pitch }, brush, units });
 }
 
 function saveStateSoon(): void {
   if (stateTimer) clearTimeout(stateTimer);
-  stateTimer = setTimeout(() => {
-    if (!storageOk || !projectId) return;
-    void call({ type: 'state', json: stateJson(), projectId });
-  }, 1000);
+  stateTimer = setTimeout(saveStateNow, 1000);
+}
+
+/** View and tool state (PRJ-10) plus the project's units (PRJ-9), written now. */
+function saveStateNow(): void {
+  if (stateTimer) clearTimeout(stateTimer);
+  stateTimer = null;
+  if (!storageOk || !projectId) return;
+  void call({ type: 'state', json: stateJson(), projectId });
 }
 
 // ---------- saving ----------
@@ -275,30 +289,142 @@ function copyIn(bytes: Uint8Array): [number, number] {
   return [ptr, bytes.length];
 }
 
+/** Vertices of the mesh in the engine now (0 before the first one). */
+let meshVerts = 0;
+
+/** What the app holds now: WASM memory (never shrinks) + GPU buffers (the memory ledger). */
+function steadyMB(): number {
+  return (core.mem().byteLength + (renderer?.gpuBytes ?? 0)) / 2 ** 20;
+}
+
 async function createSphere(n: number): Promise<boolean> {
   const verts = 6 * n * n + 2;
   const needMB = (verts * BYTES_PER_VERTEX) / 2 ** 20;
-  if (needMB > budgetMB) {
-    post({ type: 'refused', text: `A ${(12 * n * n).toLocaleString()}-triangle sphere needs about ${Math.round(needMB)} MB; this iPad's budget is ${budgetMB} MB.` });
+  // PLT-8 pre-flight against the learned budget: the new mesh replaces the current one, whose
+  // memory is reused, so only the growth beyond it is transient.
+  const currentMeshMB = (meshVerts * BYTES_PER_VERTEX) / 2 ** 20;
+  const pre = fits(steadyMB(), Math.max(0, needMB - currentMeshMB), 'This sphere');
+  if (!pre.ok) {
+    post({
+      type: 'refused',
+      text: `A ${(12 * n * n).toLocaleString('en-US')}-triangle sphere needs about ${fmtMB(needMB)}; with ${fmtMB(pre.steadyMB)} in use that is over this iPad's ${fmtMB(pre.budgetMB)} budget (${budgetSource(currentBudget())}).`,
+    });
     return false;
   }
   core.x.eng_new_sphere(n, LEAF);
-  core.x.eng_set_history(Math.round(budgetMB * 0.25), 200);
+  await createProjectFromEngine(`Sphere ${12 * n * n}`, 'm');
+  return true;
+}
+
+/** A new project from the mesh the engine holds now (sphere, import): history reset, files written
+ *  through persist 'create', view framed. Brush and camera live in the engine, so the brush is
+ *  re-sent after every install (the camera is committed before each stroke). */
+async function createProjectFromEngine(name: string, u: Units): Promise<void> {
+  core.x.eng_set_history(Math.round(budgetMB() * 0.25), 200);
+  meshVerts = (core.x.eng_positions_bytes() / 12) | 0;
+  setBrush(brush);
   lastAcked = 0;
   journalBytes = 0;
+  units = u;
   const tlen = core.x.eng_topo_bytes();
   const topo = core.out(tlen);
   const positions = new Uint8Array(core.mem(), core.x.eng_positions_ptr(), core.x.eng_positions_bytes()).slice().buffer;
   projectId = crypto.randomUUID();
   if (storageOk) {
-    projectName = `Sphere ${12 * n * n}`;
-    const r = await call({ type: 'create', projectId, name: projectName, topo, positions }, [topo, positions]);
+    projectName = name;
+    const r = await call({ type: 'create', projectId, name, topo, positions }, [topo, positions]);
     if (!r.ok) storageFailed(r.error);
   }
   frameView(true);
+  saveStateNow();
   renderer.uploadAll(core);
   requestFrame();
-  return true;
+  post({ type: 'units', units });
+}
+
+// ---------- [io] import (IMP-0/1/2) ----------
+const IMPORT_HINT: Record<string, number> = { obj: 1, stl: 2 };
+const REPORT_WORDS = 26; // core/src/io ImportReport::to_words
+const IMPORT_ERRORS = ['', 'not a mesh file it can read', 'there are no faces in it', 'a number it can\u2019t read', 'a face points at a vertex that isn\u2019t there', 'the file is cut short', 'it is too large', 'cleanup failed (a bug)'];
+const FORMATS: ImportReport['format'][] = ['obj', 'obj', 'stl-binary', 'stl-ascii'];
+
+/** Parses + cleans in WASM, installs the mesh, then makes it a NEW project (the previous one
+ *  stays saved). On any failure the current sculpt is untouched. */
+async function importMesh(name: string, ext: string, bytes: ArrayBuffer): Promise<void> {
+  const hint = IMPORT_HINT[ext.toLowerCase()];
+  if (!hint) {
+    post({ type: 'import-failed', text: `Maquette imports .obj and .stl files; \u201c${name}\u201d isn\u2019t one.` });
+    return;
+  }
+  // Pre-flight (PLT-8): parse + cleanup + the new mesh, from the file size. OBJ ~50 bytes per
+  // vertex; STL 50 bytes per facet, ~2 facets per vertex. Refused before any memory is touched.
+  const perByte = hint === 1 ? 2 + 290 / 50 : 2 + 160 / 50 + BYTES_PER_VERTEX / 100;
+  const needMB = (bytes.byteLength * perByte) / 2 ** 20;
+  // PLT-8: against the learned budget; the import replaces the current mesh, whose memory is reused.
+  const pre = fits(steadyMB(), Math.max(0, needMB - (meshVerts * BYTES_PER_VERTEX) / 2 ** 20), name);
+  if (!pre.ok) {
+    post({ type: 'import-failed', text: `${name} needs about ${fmtMB(needMB)} to import; with ${fmtMB(pre.steadyMB)} in use that is over this iPad's ${fmtMB(pre.budgetMB)} budget (${budgetSource(currentBudget())}).` });
+    return;
+  }
+  // Same sequence as a new sphere (PRJ-1): the open project's records are flushed before the
+  // engine's mesh is replaced, and no other switch can interleave.
+  if (switching || editBlocked()) {
+    post({ type: 'import-failed', text: 'Another project change is in progress or storage is full; try again in a moment.' });
+    return;
+  }
+  switching = true;
+  try {
+    await flushProject();
+    loading = true;
+    await importInstalled(name, hint, bytes);
+  } finally {
+    loading = false;
+    switching = false;
+  }
+}
+
+async function importInstalled(name: string, hint: number, bytes: ArrayBuffer): Promise<void> {
+  const t0 = performance.now();
+  const src = new Uint8Array(bytes);
+  const ptr = core.x.mq_alloc(src.length);
+  new Uint8Array(core.mem(), ptr, src.length).set(src);
+  const rp = core.x.eng_import(ptr, src.length, hint, LEAF);
+  core.x.mq_free(ptr, src.length);
+  const w = core.u32s(rp, REPORT_WORDS).slice();
+  if (w[0] !== 0) {
+    const why = IMPORT_ERRORS[w[0]] ?? `error ${w[0]}`;
+    post({ type: 'import-failed', text: `Couldn\u2019t import ${name}: ${why}${w[2] ? ` (line ${w[2]})` : ''}. Your sculpt is unchanged.` });
+    return;
+  }
+  const report: ImportReport = {
+    name,
+    format: FORMATS[w[1]] ?? 'obj',
+    inVerts: w[3],
+    inFaces: w[4],
+    weldedVerts: w[5],
+    droppedDuplicate: w[6],
+    droppedDegenerate: w[7],
+    flippedFaces: w[8],
+    splitNonManifold: w[9],
+    components: w[10],
+    boundaryEdges: w[11],
+    looseVerts: w[12],
+    verts: w[13],
+    faces: w[14],
+    tris: w[15],
+    coloredVerts: w[16],
+    groups: w[17],
+    ignoredElements: w[18],
+    unitsGuess: UNITS[w[19]] ?? 'm',
+    bbox: Array.from(new Float32Array(w.buffer, 20 * 4, 6)),
+    ms: 0,
+  };
+  await createProjectFromEngine(name.replace(/\.[^.]*$/, '') || 'Import', report.unitsGuess);
+  brushRestored = false;
+  report.ms = Math.round(performance.now() - t0);
+  post({ type: 'import-done', report });
+  postStats(true);
+  postProject();
 }
 
 function loadProject(r: OpenResult, unclean: boolean): RecoveryInfo {
@@ -308,7 +434,8 @@ function loadProject(r: OpenResult, unclean: boolean): RecoveryInfo {
   core.x.mq_free(tp, tl);
   core.x.mq_free(pp, pl);
   if (ok !== 1) throw new Error(`project files damaged (code ${ok})`);
-  core.x.eng_set_history(Math.round(budgetMB * 0.25), 200);
+  meshVerts = (r.positions!.byteLength / 12) | 0;
+  core.x.eng_set_history(Math.round(budgetMB() * 0.25), 200);
   // Replay every intact journal record in order; stop at the first damaged one.
   const j = new Uint8Array(r.journal ?? new ArrayBuffer(0));
   let records = 0;
@@ -337,12 +464,14 @@ function loadProject(r: OpenResult, unclean: boolean): RecoveryInfo {
   core.x.eng_set_seq(lastSeq);
   lastAcked = lastSeq;
   projectId = r.projectId!;
-  // Restore view and tool state (PRJ-10).
+  // Restore view and tool state (PRJ-10) and the project's units (PRJ-9).
+  units = 'm';
   let restoredCamera = false;
   if (r.state) {
     try {
-      const st = JSON.parse(r.state) as { camera?: { eye: V3; yaw: number; pitch: number }; brush?: BrushState };
+      const st = JSON.parse(r.state) as { camera?: { eye: V3; yaw: number; pitch: number }; brush?: BrushState; units?: Units };
       if (st.brush) brush = { ...brush, ...st.brush };
+      if (st.units && UNITS.includes(st.units)) units = st.units;
       frameView(false);
       if (st.camera) {
         cam.eye = st.camera.eye;
@@ -358,7 +487,6 @@ function loadProject(r: OpenResult, unclean: boolean): RecoveryInfo {
 
 async function init(m: Extract<ToEngine, { type: 'init' }>): Promise<void> {
   dpr = m.dpr;
-  budgetMB = m.budgetMB;
   persist = m.persist;
   persist.onmessage = (e: MessageEvent<PersistReply>) => {
     const w = waiting.get(e.data.id);
@@ -372,8 +500,13 @@ async function init(m: Extract<ToEngine, { type: 'init' }>): Promise<void> {
   resize(m.width, m.height, m.dpr);
   let unclean = false;
   const s = await call({ type: 'session-start' });
-  if (s.ok) unclean = !!(s.value as { uncleanExit: boolean }).uncleanExit;
-  else storageFailed(s.error);
+  if (s.ok) {
+    // PLT-8: the persist worker learned from the last session; this budget is in force now.
+    const sv = s.value as SessionStartResult;
+    unclean = !!sv.uncleanExit;
+    setBudget(sv.budget);
+    post({ type: 'budget', budget: sv.budget, change: sv.change, stress: sv.stress });
+  } else storageFailed(s.error);
   let recovered: RecoveryInfo = { project: '', records: 0, stoppedAt: null, lastSeq: 0, uncleanExit: unclean };
   const r = storageOk ? await call({ type: 'open-last' }) : null;
   if (r && !r.ok) storageFailed(r.error);
@@ -399,8 +532,10 @@ async function init(m: Extract<ToEngine, { type: 'init' }>): Promise<void> {
   if (recovered.records > 0 || recovered.stoppedAt) void checkpoint();
   post({ type: 'ready', stats: stats(), recovered, brush, simd: core.simd });
   postProject();
+  post({ type: 'units', units });
   if (!storageOk) post({ type: 'storage', ok: false, error: 'storage unavailable' });
   setInterval(() => {
+    highWaterMB = Math.max(highWaterMB, steadyMB()); // the ledger's high-water mark (PLT-8 learns from it)
     if (storageOk) void call({ type: 'session-beat', highWaterMB: Math.round(highWaterMB), seq: core.x.eng_seq() });
   }, 2000);
 }
@@ -665,6 +800,31 @@ scope.onmessage = async (e: MessageEvent<ToEngine>) => {
     case 'disk-retry':
       await retryUnsaved();
       break;
+    // [io] import, units, STL export (IMP-0/1/2, PRJ-9, EXP-2)
+    case 'import-mesh':
+      if (strokeActive) {
+        post({ type: 'import-failed', text: 'Finish the stroke, then import.' });
+        break;
+      }
+      await importMesh(m.name, m.ext, m.bytes);
+      break;
+    case 'set-units':
+      if (!UNITS.includes(m.units)) break;
+      units = m.units;
+      saveStateNow();
+      post({ type: 'units', units });
+      break;
+    case 'export-stl': {
+      const scale = UNIT_TO_MM[units];
+      const ip = core.x.mq_alloc(12);
+      const len = core.x.eng_export_stl(scale, ip);
+      const [tris, boundaryEdges] = core.u32s(ip, 3);
+      core.x.mq_free(ip, 12);
+      const bytes = core.out(len);
+      const date = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+      post({ type: 'export-ready', name: `maquette-${date}.stl`, bytes, faces: tris, verts: stats().verts, format: 'stl', mime: 'model/stl', boundaryEdges, units, scale }, [bytes]);
+      break;
+    }
     case 'export-obj': {
       const fp = core.x.mq_alloc(4);
       const len = core.x.eng_export_obj(fp);
@@ -697,6 +857,10 @@ scope.onmessage = async (e: MessageEvent<ToEngine>) => {
     }
     case 'debug-trap':
       core.x.eng_debug_trap();
+      break;
+    case 'budget': // PLT-8: a stress test that ended without a kill set a new budget
+      setBudget(m.budget);
+      core.x.eng_set_history(Math.round(budgetMB() * 0.25), 200);
       break;
     case 'query':
       scope.postMessage({ type: 'query-result', hash: core.x.eng_hash().toString(16), stats: stats(), storageOk });

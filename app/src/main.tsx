@@ -11,6 +11,8 @@ import { InputController } from './input';
 import { registerServiceWorker } from './sw-client';
 import { call, connectLibrary, onEngineMessage, openProject, refreshProjects, watchStorage } from './projects';
 import { holdPresets, loadPrefs, onProjectOpened, prefs, savePrefsNow, setPref } from './prefs';
+import { io, ioMessage } from './io-ui';
+import { attachPersist, benchRun, budget, onBudget, runBench, startStressTest, stressRun } from './budget-client';
 import type { FromEngine, ToEngine } from './shared/protocol';
 
 
@@ -19,6 +21,13 @@ const persist = new PersistWorker();
 connectLibrary(persist, CHANNEL);
 void loadPrefs();
 watchStorage();
+// PLT-8: the main thread's own persist port (budget, speed test, stress test); the stress worker
+// gets one more through `connect`.
+{
+  const ch = new MessageChannel();
+  persist.postMessage({ type: 'connect', port: ch.port1, channel: CHANNEL }, [ch.port1]);
+  attachPersist(ch.port2, (p) => persist.postMessage({ type: 'connect', port: p, channel: CHANNEL }, [p]));
+}
 let engine: Worker | null = null;
 let canvas: HTMLCanvasElement | null = null;
 let restarts = 0;
@@ -79,6 +88,7 @@ function restartEngine(error: string): void {
 function onEngine(m: FromEngine): void {
   onEngineMessage(m); // projects / storage / disk state (P1b)
   if (m.type === 'ready') holdPresets(); // its restored brush is not a preset change (prefs.ts)
+  ioMessage(m); // [io] import report, units, STL export details
   switch (m.type) {
     case 'project':
       if (m.error) ui.notice.value = { level: 'warn', text: m.error };
@@ -110,13 +120,16 @@ function onEngine(m: FromEngine): void {
       ui.notice.value = { level: 'warn', text: m.text };
       break;
     case 'export-ready':
-      ui.exportFile.value = { name: m.name, file: new File([m.bytes], m.name, { type: 'text/plain' }), faces: m.faces, verts: m.verts };
+      ui.exportFile.value = { name: m.name, file: new File([m.bytes], m.name, { type: m.mime ?? 'text/plain' }), faces: m.faces, verts: m.verts };
       break;
     case 'fatal':
       restartEngine(m.error);
       break;
     case 'query-result':
       queryWaiters.shift()?.(m);
+      break;
+    case 'budget':
+      onBudget(m);
       break;
   }
 }
@@ -162,6 +175,8 @@ document.addEventListener('visibilitychange', () => send({ type: document.visibi
   send,
   input: input.stats,
   sheets: SHEETS,
+  io,
   // P1b test and diagnostics hooks: the library (persist worker) and preferences.
+  budget: { state: budget, bench: benchRun, stress: stressRun, runBench, startStressTest },
   library: { call, refreshProjects, openProject, prefs: () => prefs.value, setPref, savePrefsNow },
 };

@@ -1,8 +1,20 @@
 // Messages between the three threads. The main thread never touches the mesh (invariant 1);
 // the engine worker is its only writer (invariant 2); the persist worker owns storage.
+import type { BenchResult, BudgetChange, BudgetState, StressResult } from '../budget';
 
-export type ToolName = 'draw' | 'smooth' | 'grab';
-export const TOOL_ID: Record<ToolName, number> = { draw: 0, smooth: 1, grab: 2 };
+// Tool names are stable: saved brush state and presets are keyed by them. Ids are the engine's
+// (core/src/brushes.rs Tool).
+export type ToolName =
+  | 'draw' | 'smooth' | 'grab' | 'inflate' | 'flatten' | 'clay' | 'clay-strips'
+  | 'crease' | 'pinch' | 'snake-hook' | 'layer' | 'fill' | 'scrape' | 'planar';
+export const TOOL_ID: Record<ToolName, number> = {
+  draw: 0, smooth: 1, grab: 2, inflate: 3, flatten: 4, clay: 5, 'clay-strips': 6,
+  crease: 7, pinch: 8, 'snake-hook': 9, layer: 10, fill: 11, scrape: 12, planar: 13,
+};
+
+/** Falloff presets (STK-4), engine ids in order. */
+export const FALLOFFS = ['smooth', 'smoother', 'sphere', 'root', 'sharp', 'linear', 'pow4', 'invsquare', 'constant'] as const;
+export type FalloffName = (typeof FALLOFFS)[number];
 
 export interface BrushState {
   tool: ToolName;
@@ -12,6 +24,13 @@ export interface BrushState {
   pressureStrength: boolean;
   gamma: number;
   symmetryX: boolean;
+  // Optional so brush state saved before they existed still loads (PRJ-10).
+  symmetryY?: boolean;
+  symmetryZ?: boolean;
+  falloff?: FalloffName;
+  hardness?: number;
+  autosmooth?: number;
+  accumulate?: boolean;
 }
 
 export interface Stats {
@@ -56,13 +75,19 @@ export type ToEngine =
   | { type: 'reset-view' }
   | { type: 'new-sphere'; n: number }
   | { type: 'export-obj' }
+  // [io] import / units / STL export (IMP-0/1/2, PRJ-9, EXP-2)
+  | { type: 'import-mesh'; name: string; ext: string; bytes: ArrayBuffer }
+  | { type: 'set-units'; units: Units }
+  | { type: 'export-stl' }
   | { type: 'visible' }
   | { type: 'hidden' }
   | { type: 'debug-trap' }
   | { type: 'query' }
   // P1b projects (PRJ-1): load another project by id; PLT-11: retry records the disk refused.
   | { type: 'open-project'; id: string }
-  | { type: 'disk-retry' };
+  | { type: 'disk-retry' }
+  // ---- PLT-8 device budgets ----
+  | { type: 'budget'; budget: BudgetState };
 
 /** Engine -> main. */
 export type FromEngine =
@@ -71,7 +96,11 @@ export type FromEngine =
   | { type: 'saved'; seq: number; latencyMs: number }
   | { type: 'status'; text: string; level: 'info' | 'warn' | 'error' }
   | { type: 'storage'; ok: boolean; error?: string; persisted?: boolean }
-  | { type: 'export-ready'; name: string; bytes: ArrayBuffer; faces: number; verts: number }
+  | { type: 'export-ready'; name: string; bytes: ArrayBuffer; faces: number; verts: number; format?: 'obj' | 'stl'; mime?: string; boundaryEdges?: number; units?: Units; scale?: number }
+  // [io] import / units (IMP-0/1/2, PRJ-9)
+  | { type: 'import-done'; report: ImportReport }
+  | { type: 'import-failed'; text: string }
+  | { type: 'units'; units: Units }
   | { type: 'refused'; text: string }
   | { type: 'state'; brush?: BrushState }
   | { type: 'fatal'; error: string }
@@ -80,7 +109,9 @@ export type FromEngine =
   // open). `brushRestored` = the brush came from the project's saved state (PRJ-10).
   | { type: 'project'; id: string; name: string; brush: BrushState; brushRestored: boolean; error?: string }
   // PLT-11: the disk refused journal records; edits are blocked until they are saved.
-  | { type: 'disk'; full: boolean; unsaved: number };
+  | { type: 'disk'; full: boolean; unsaved: number }
+  // ---- PLT-8 device budgets: the budget in force after session-start learning ----
+  | { type: 'budget'; budget: BudgetState; change: BudgetChange | null; stress: StressResult | null };
 
 export interface RecoveryInfo {
   project: string;
@@ -101,7 +132,27 @@ export type ToPersist =
   | { id: number; type: 'session-start' }
   | { id: number; type: 'session-beat'; highWaterMB: number; seq: number }
   | { id: number; type: 'session-end' }
-  | { id: number; type: 'estimate' };
+  | { id: number; type: 'estimate' }
+  // ---- PLT-8 device budgets (main thread and the stress worker have their own ports) ----
+  | { id: number; type: 'budget-get' }
+  | { id: number; type: 'budget-bench'; bench: BenchResult }
+  | { id: number; type: 'session-mark'; deliberate: 'kill-test' | 'stress-test'; appMB: number }
+  | { id: number; type: 'stress-mark'; phase: 'growing' | 'ok'; attemptMB: number; lastOkMB: number }
+  | { id: number; type: 'stress-end'; outcome: 'refused' | 'capped'; lastOkMB: number; failedAtMB: number | null };
+
+/** session-start reply (PLT-8 learning happens inside it). */
+export interface SessionStartResult {
+  uncleanExit: boolean;
+  budget: BudgetState;
+  change: BudgetChange | null;
+  stress: StressResult | null;
+}
+/** stress-end / budget-bench / budget-get reply. */
+export interface BudgetReply {
+  budget: BudgetState;
+  change: BudgetChange | null;
+  stress: StressResult | null;
+}
 
 export interface OpenResult {
   status: 'none' | 'ok';
@@ -125,3 +176,37 @@ export interface PersistReply {
 
 /** Channel-namespaced storage root (decision row "Persistence"). */
 export const STORAGE_ROOT = (channel: string) => `app-${channel}`;
+
+// ---------- [io] import, units, STL export (IMP-0/1/2, PRJ-9, EXP-2) ----------
+
+/** What one unit of the project means (PRJ-9). Index = the engine's code (core/src/io Units). */
+export type Units = 'mm' | 'cm' | 'm';
+export const UNITS: readonly Units[] = ['mm', 'cm', 'm'];
+/** STL export scale: project units -> millimetres. */
+export const UNIT_TO_MM: Record<Units, number> = { mm: 1, cm: 10, m: 1000 };
+
+/** IMP-0 counts from core/src/io ImportReport (exact). */
+export interface ImportReport {
+  name: string;
+  format: 'obj' | 'stl-binary' | 'stl-ascii';
+  inVerts: number;
+  inFaces: number;
+  weldedVerts: number;
+  droppedDuplicate: number;
+  droppedDegenerate: number;
+  flippedFaces: number;
+  splitNonManifold: number;
+  components: number;
+  boundaryEdges: number;
+  looseVerts: number;
+  verts: number;
+  faces: number;
+  tris: number;
+  coloredVerts: number;
+  groups: number;
+  ignoredElements: number;
+  unitsGuess: Units;
+  /** min xyz, max xyz in file units (engine axes: Y up). */
+  bbox: number[];
+  ms: number;
+}

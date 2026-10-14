@@ -120,16 +120,46 @@ export function phaseCounts(spec, rows) {
   return counts;
 }
 
-export function printStatus(spec, rows) {
+/** Rows up to the current phase, and later-phase rows (features shipping early). */
+export function splitByPhase(spec, rows) {
+  const current = phaseIndex(spec, spec.current_phase);
+  return { upTo: rows.filter((r) => phaseIndex(spec, r.phase) <= current), later: rows.filter((r) => phaseIndex(spec, r.phase) > current) };
+}
+
+/** Writes the status JSON: counts and rows up to the current phase, plus every later-phase row
+ *  (check-ui allows a later-phase control only when its row says PASS). */
+export function writeStatusJson(file, spec, allRows) {
+  const { upTo, later } = splitByPhase(spec, allRows);
+  const totals = Object.fromEntries(STATUSES.map((s) => [s, upTo.filter((r) => r.status === s).length]));
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, JSON.stringify({ currentPhase: spec.current_phase, generatedAt: new Date().toISOString(), counts: phaseCounts(spec, upTo), totals, rows: upTo, later }, null, 1));
+}
+
+/** id -> status row, for every phase, from a JSON written by writeStatusJson. */
+export function loadStatusMap(file) {
+  const j = JSON.parse(readFileSync(file, 'utf8'));
+  return new Map([...(j.rows ?? []), ...(j.later ?? [])].map((r) => [r.id, r]));
+}
+
+/** A row backed by something: a tagged test (any result) or a device report's verdict. */
+const hasEvidence = (r) => r.tests.length > 0 || r.status === 'PASS' || r.status === 'FAIL';
+
+export function printStatus(spec, rows, later = []) {
   const w = (s, n) => String(s).padEnd(n).slice(0, n);
   console.log(`\n${w('feature', 8)} ${w('phase', 5)} ${w('name', 34)} ${w('status', 15)} evidence`);
   for (const r of rows) console.log(`${w(r.id, 8)} ${w(r.phase, 5)} ${w(r.name, 34)} ${w(r.status, 15)} ${r.evidence}`);
+  const early = later.filter(hasEvidence);
+  if (early.length) {
+    console.log(`\nlater-phase features with evidence (shipping before ${spec.current_phase}):`);
+    for (const r of early) console.log(`${w(r.id, 8)} ${w(r.phase, 5)} ${w(r.name, 34)} ${w(r.status, 15)} ${r.evidence}`);
+  }
   const counts = phaseCounts(spec, rows);
   console.log(`\n${w('phase', 6)} ${w('features', 9)} ${STATUSES.map((s) => w(s, 15)).join(' ')}`);
   for (const [p, c] of Object.entries(counts)) console.log(`${w(p, 6)} ${w(c.features, 9)} ${STATUSES.map((s) => w(c[s], 15)).join(' ')}`);
   const tot = Object.fromEntries(STATUSES.map((s) => [s, rows.filter((r) => r.status === s).length]));
   console.log(`\nFeature status @ scripts/feature-status.mjs (current phase ${spec.current_phase}): ${rows.length} features · ${STATUSES.map((s) => `${s} ${tot[s]}`).join(' · ')}`);
-  return tot;
+  if (early.length) console.log(`Later phases: ${early.length} features with evidence · PASS ${early.filter((r) => r.status === 'PASS').length} · FAIL ${early.filter((r) => r.status === 'FAIL').length}`);
+  return { ...tot, laterPass: early.filter((r) => r.status === 'PASS').length, laterFail: early.filter((r) => r.status === 'FAIL').length };
 }
 
 export function rustOutput(file) {
@@ -159,11 +189,10 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
     return i > 0 ? process.argv[i + 1] : def;
   };
   const g = gather({ rustFile: arg('--rust', null), playwrightFile: arg('--playwright', 'test-results/playwright.json'), oracleFile: arg('--oracle', 'test-results/oracle.json') });
-  const rows = computeStatus({ ...g, all: process.argv.includes('--all') });
+  const all = computeStatus({ ...g, all: true });
+  const { upTo, later } = splitByPhase(g.spec, all);
   if (!g.playwrightRan) console.log('(no Playwright JSON report: e2e evidence missing; npm run verify writes test-results/playwright.json)');
-  const tot = printStatus(g.spec, rows);
-  const out = arg('--json', 'test-results/feature-status.json');
-  mkdirSync(dirname(out), { recursive: true });
-  writeFileSync(out, JSON.stringify({ currentPhase: g.spec.current_phase, generatedAt: new Date().toISOString(), counts: phaseCounts(g.spec, rows), totals: tot, rows }, null, 1));
-  process.exit(tot.FAIL ? 1 : 0);
+  const tot = process.argv.includes('--all') ? printStatus(g.spec, all) : printStatus(g.spec, upTo, later);
+  writeStatusJson(arg('--json', 'test-results/feature-status.json'), g.spec, all);
+  process.exit(tot.FAIL || tot.laterFail ? 1 : 0);
 }
