@@ -18,8 +18,10 @@ import {
   type Units,
   UNITS,
   UNIT_TO_MM,
+  type SessionStartResult,
 } from '../shared/protocol';
 import { LOW_SPACE_BYTES } from '../shared/library';
+import { budgetMB, budgetSource, currentBudget, fits, fmtMB, setBudget } from '../budget';
 
 const DEFAULT_SPHERE = 96; // 110,592 triangles
 const LEAF = 1024;
@@ -39,7 +41,6 @@ let renderer: Renderer;
 const cam = new Camera();
 let dpr = 1;
 let persist: MessagePort;
-let budgetMB = 1459;
 let storageOk = true;
 let projectId = '';
 let brush: BrushState = { tool: 'draw', radiusPx: 40, strength: 0.5, pressureRadius: false, pressureStrength: true, gamma: 1, symmetryX: true };
@@ -285,11 +286,26 @@ function copyIn(bytes: Uint8Array): [number, number] {
   return [ptr, bytes.length];
 }
 
+/** Vertices of the mesh in the engine now (0 before the first one). */
+let meshVerts = 0;
+
+/** What the app holds now: WASM memory (never shrinks) + GPU buffers (the memory ledger). */
+function steadyMB(): number {
+  return (core.mem().byteLength + (renderer?.gpuBytes ?? 0)) / 2 ** 20;
+}
+
 async function createSphere(n: number): Promise<boolean> {
   const verts = 6 * n * n + 2;
   const needMB = (verts * BYTES_PER_VERTEX) / 2 ** 20;
-  if (needMB > budgetMB) {
-    post({ type: 'refused', text: `A ${(12 * n * n).toLocaleString()}-triangle sphere needs about ${Math.round(needMB)} MB; this iPad's budget is ${budgetMB} MB.` });
+  // PLT-8 pre-flight against the learned budget: the new mesh replaces the current one, whose
+  // memory is reused, so only the growth beyond it is transient.
+  const currentMeshMB = (meshVerts * BYTES_PER_VERTEX) / 2 ** 20;
+  const pre = fits(steadyMB(), Math.max(0, needMB - currentMeshMB), 'This sphere');
+  if (!pre.ok) {
+    post({
+      type: 'refused',
+      text: `A ${(12 * n * n).toLocaleString('en-US')}-triangle sphere needs about ${fmtMB(needMB)}; with ${fmtMB(pre.steadyMB)} in use that is over this iPad's ${fmtMB(pre.budgetMB)} budget (${budgetSource(currentBudget())}).`,
+    });
     return false;
   }
   core.x.eng_new_sphere(n, LEAF);
@@ -301,7 +317,8 @@ async function createSphere(n: number): Promise<boolean> {
  *  through persist 'create', view framed. Brush and camera live in the engine, so the brush is
  *  re-sent after every install (the camera is committed before each stroke). */
 async function createProjectFromEngine(name: string, u: Units): Promise<void> {
-  core.x.eng_set_history(Math.round(budgetMB * 0.25), 200);
+  core.x.eng_set_history(Math.round(budgetMB() * 0.25), 200);
+  meshVerts = (core.x.eng_positions_bytes() / 12) | 0;
   setBrush(brush);
   lastAcked = 0;
   journalBytes = 0;
@@ -340,8 +357,10 @@ async function importMesh(name: string, ext: string, bytes: ArrayBuffer): Promis
   // vertex; STL 50 bytes per facet, ~2 facets per vertex. Refused before any memory is touched.
   const perByte = hint === 1 ? 2 + 290 / 50 : 2 + 160 / 50 + BYTES_PER_VERTEX / 100;
   const needMB = (bytes.byteLength * perByte) / 2 ** 20;
-  if (needMB > budgetMB) {
-    post({ type: 'import-failed', text: `${name} needs about ${Math.round(needMB)} MB to import; this iPad's budget is ${budgetMB} MB.` });
+  // PLT-8: against the learned budget; the import replaces the current mesh, whose memory is reused.
+  const pre = fits(steadyMB(), Math.max(0, needMB - (meshVerts * BYTES_PER_VERTEX) / 2 ** 20), name);
+  if (!pre.ok) {
+    post({ type: 'import-failed', text: `${name} needs about ${fmtMB(needMB)} to import; with ${fmtMB(pre.steadyMB)} in use that is over this iPad's ${fmtMB(pre.budgetMB)} budget (${budgetSource(currentBudget())}).` });
     return;
   }
   // Same sequence as a new sphere (PRJ-1): the open project's records are flushed before the
@@ -412,7 +431,8 @@ function loadProject(r: OpenResult, unclean: boolean): RecoveryInfo {
   core.x.mq_free(tp, tl);
   core.x.mq_free(pp, pl);
   if (ok !== 1) throw new Error(`project files damaged (code ${ok})`);
-  core.x.eng_set_history(Math.round(budgetMB * 0.25), 200);
+  meshVerts = (r.positions!.byteLength / 12) | 0;
+  core.x.eng_set_history(Math.round(budgetMB() * 0.25), 200);
   // Replay every intact journal record in order; stop at the first damaged one.
   const j = new Uint8Array(r.journal ?? new ArrayBuffer(0));
   let records = 0;
@@ -464,7 +484,6 @@ function loadProject(r: OpenResult, unclean: boolean): RecoveryInfo {
 
 async function init(m: Extract<ToEngine, { type: 'init' }>): Promise<void> {
   dpr = m.dpr;
-  budgetMB = m.budgetMB;
   persist = m.persist;
   persist.onmessage = (e: MessageEvent<PersistReply>) => {
     const w = waiting.get(e.data.id);
@@ -478,8 +497,13 @@ async function init(m: Extract<ToEngine, { type: 'init' }>): Promise<void> {
   resize(m.width, m.height, m.dpr);
   let unclean = false;
   const s = await call({ type: 'session-start' });
-  if (s.ok) unclean = !!(s.value as { uncleanExit: boolean }).uncleanExit;
-  else storageFailed(s.error);
+  if (s.ok) {
+    // PLT-8: the persist worker learned from the last session; this budget is in force now.
+    const sv = s.value as SessionStartResult;
+    unclean = !!sv.uncleanExit;
+    setBudget(sv.budget);
+    post({ type: 'budget', budget: sv.budget, change: sv.change, stress: sv.stress });
+  } else storageFailed(s.error);
   let recovered: RecoveryInfo = { project: '', records: 0, stoppedAt: null, lastSeq: 0, uncleanExit: unclean };
   const r = storageOk ? await call({ type: 'open-last' }) : null;
   if (r && !r.ok) storageFailed(r.error);
@@ -508,6 +532,7 @@ async function init(m: Extract<ToEngine, { type: 'init' }>): Promise<void> {
   post({ type: 'units', units });
   if (!storageOk) post({ type: 'storage', ok: false, error: 'storage unavailable' });
   setInterval(() => {
+    highWaterMB = Math.max(highWaterMB, steadyMB()); // the ledger's high-water mark (PLT-8 learns from it)
     if (storageOk) void call({ type: 'session-beat', highWaterMB: Math.round(highWaterMB), seq: core.x.eng_seq() });
   }, 2000);
 }
@@ -829,6 +854,10 @@ scope.onmessage = async (e: MessageEvent<ToEngine>) => {
     }
     case 'debug-trap':
       core.x.eng_debug_trap();
+      break;
+    case 'budget': // PLT-8: a stress test that ended without a kill set a new budget
+      setBudget(m.budget);
+      core.x.eng_set_history(Math.round(budgetMB() * 0.25), 200);
       break;
     case 'query':
       scope.postMessage({ type: 'query-result', hash: core.x.eng_hash().toString(16), stats: stats(), storageOk });

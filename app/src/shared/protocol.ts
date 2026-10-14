@@ -1,5 +1,6 @@
 // Messages between the three threads. The main thread never touches the mesh (invariant 1);
 // the engine worker is its only writer (invariant 2); the persist worker owns storage.
+import type { BenchResult, BudgetChange, BudgetState, StressResult } from '../budget';
 
 export type ToolName = 'draw' | 'smooth' | 'grab';
 export const TOOL_ID: Record<ToolName, number> = { draw: 0, smooth: 1, grab: 2 };
@@ -66,7 +67,9 @@ export type ToEngine =
   | { type: 'query' }
   // P1b projects (PRJ-1): load another project by id; PLT-11: retry records the disk refused.
   | { type: 'open-project'; id: string }
-  | { type: 'disk-retry' };
+  | { type: 'disk-retry' }
+  // ---- PLT-8 device budgets ----
+  | { type: 'budget'; budget: BudgetState };
 
 /** Engine -> main. */
 export type FromEngine =
@@ -88,7 +91,9 @@ export type FromEngine =
   // open). `brushRestored` = the brush came from the project's saved state (PRJ-10).
   | { type: 'project'; id: string; name: string; brush: BrushState; brushRestored: boolean; error?: string }
   // PLT-11: the disk refused journal records; edits are blocked until they are saved.
-  | { type: 'disk'; full: boolean; unsaved: number };
+  | { type: 'disk'; full: boolean; unsaved: number }
+  // ---- PLT-8 device budgets: the budget in force after session-start learning ----
+  | { type: 'budget'; budget: BudgetState; change: BudgetChange | null; stress: StressResult | null };
 
 export interface RecoveryInfo {
   project: string;
@@ -109,7 +114,27 @@ export type ToPersist =
   | { id: number; type: 'session-start' }
   | { id: number; type: 'session-beat'; highWaterMB: number; seq: number }
   | { id: number; type: 'session-end' }
-  | { id: number; type: 'estimate' };
+  | { id: number; type: 'estimate' }
+  // ---- PLT-8 device budgets (main thread and the stress worker have their own ports) ----
+  | { id: number; type: 'budget-get' }
+  | { id: number; type: 'budget-bench'; bench: BenchResult }
+  | { id: number; type: 'session-mark'; deliberate: 'kill-test' | 'stress-test'; appMB: number }
+  | { id: number; type: 'stress-mark'; phase: 'growing' | 'ok'; attemptMB: number; lastOkMB: number }
+  | { id: number; type: 'stress-end'; outcome: 'refused' | 'capped'; lastOkMB: number; failedAtMB: number | null };
+
+/** session-start reply (PLT-8 learning happens inside it). */
+export interface SessionStartResult {
+  uncleanExit: boolean;
+  budget: BudgetState;
+  change: BudgetChange | null;
+  stress: StressResult | null;
+}
+/** stress-end / budget-bench / budget-get reply. */
+export interface BudgetReply {
+  budget: BudgetState;
+  change: BudgetChange | null;
+  stress: StressResult | null;
+}
 
 export interface OpenResult {
   status: 'none' | 'ok';

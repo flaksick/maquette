@@ -418,3 +418,15 @@ table.counts td:last-child {
 .warn-text {
   color: #d9b06a;
 }
+.budget {
+  border-top: 1px solid var(--line);
+  margin-top: 10px;
+  padding-top: 4px;
+}
+.budget h3 {
+  font-size: 15px;
+  margin: 6px 0 4px;
+}
+.budget p {
+  margin: 4px 0;
+}

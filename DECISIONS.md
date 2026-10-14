@@ -85,3 +85,20 @@ repo carries no binary assets.
 - **Degenerate = < 3 distinct vertices or exactly zero area**; near-zero slivers are kept (harmless
   to normals and picking). Non-manifold edges pair by angle around the edge; two cubes sharing an
   edge stay two closed cubes (split 2 @ imp0_defect_nonmanifold_edge).
+
+## 2026-10-14 · Playwright WebKit shares OPFS across persistent profiles
+WebKit (Playwright, Mac) keeps OPFS per origin under `~/Library/WebKit/org.webkit.Playwright/
+WebsiteData`, not in the profile directory: every persistent profile on one port sees the same
+`app-dev/` files @ a fresh-profile run that opened with the previous test's budget.json (256 MB,
+stress-test basis). Consequences: e2e tests that depend on stored state delete it first
+(tests/budgets.spec.ts `FRESH`); parallel streams stay isolated only because each uses its own port.
+
+## 2026-10-14 · PLT-8 budgets: policy constants
+Unclean exit at >= 85% of the budget cuts it 10%; three clean sessions above 90% raise it 5%, never
+above the class ceiling (2,432 MB, the Air 4's last good allocation); floor 256 MB; a stress test
+sets budget = 0.6 x what the iPad held (the lab formula), and a run that only reached its cap can
+raise but never lower it. Comfortable polycount = largest mesh whose brush frame (4 coalesced
+samples + frame update) stays <= 8 ms p95. Mac WebKit: 5 ms p95 at 2.0M tris -> 3.2M comfortable
+@ test-results/plt8-budgets.json; without cross-origin isolation Safari's timer has 1 ms steps, so
+p95 rounds up (conservative). The device run sets the real number.
+
