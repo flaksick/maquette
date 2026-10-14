@@ -4,6 +4,7 @@ _Generated from `spec.yaml` by `scripts/gen-spec.mjs`. Do not hand-edit._
 
 **134 features** @ spec.yaml: 65 daily, 58 regular, 11 niche.
 First-ship phase counts @ spec.yaml: P0 1, P1a 30, P1b 16, P2 19, P3 18, P4 14, P5 14, P6 13, P7 9.
+Current phase @ spec.yaml: **P1b** (controls may only render for features of this phase or earlier).
 Status is computed from tagged test results and device reports (`npm run verify`), never written here.
 
 **Universal gates:** undoable and journaled (once UND-1 and PRJ-3 exist); symmetric where meaningful (SYM-1); mask-respecting (from P2, when MSK-1 lands); mesh validator passes after every operation in tests.
@@ -15,7 +16,7 @@ Status is computed from tagged test results and device reports (`npm run verify`
 | ID | Feature | Tier | Phase | Done when | Test |
 |---|---|---|---|---|---|
 | PLT-1 | Home Screen install | D | P1a | Add to Home Screen, open once online; 'Ready offline' only after every file is SHA-verified; standalone in both orientations | manifest lint; device checklist |
-| PLT-2 | Offline cold launch | D | P1a | Airplane-mode cold launch reopens the last project in <= 3 s (1M tris); every feature works offline; only network use is the own-file update check, with a Settings toggle (off -> manual button) | WebKit offline e2e runs the full suite offline; e2e network log: non-own-origin requests = 0; bundle audit |
+| PLT-2 | Offline cold launch, on-device only | D | P1a | Airplane-mode cold launch reopens the last project in <= 3 s (1M tris); every feature works offline; only network use is the own-file update check, with a Settings toggle (off -> manual button) | WebKit offline e2e runs the full suite offline; e2e network log: non-own-origin requests = 0; bundle audit |
 | PLT-3 | Safe updates | D | P1a (basic in P1a, full in P1b) | Downloads silently; activates on a clean cold launch; immutable versions; two failed boots revert; migrations copy-on-write until the version is marked good | e2e v1 -> v2 -> bad v3 -> auto-revert |
 | PLT-4 | Persistent storage | D | P1b | persist() requested at first save; usage and quota shown | diagnostics numbers |
 | PLT-5 | Lifecycle safety | D | P1a | Durability never relies on lifecycle events; a killed or silently reloaded app reopens to the same project; on resume, GL context loss or a blank canvas (1-pixel readback) rebuilds the GPU mirror in <= 1 s | device: 20 background/resume cycles; balloon-kill loop |
@@ -82,13 +83,13 @@ Status is computed from tagged test results and device reports (`npm run verify`
 |---|---|---|---|---|---|
 | NAV-1 | Orbit / pan / zoom | D | P1a | Turntable orbit (1 finger), pan (2), pinch zoom about the touch point, pivot on the surface; 60 fps at the measured comfortable polycount | frame-barcode harness |
 | NAV-2 | Undo / redo gestures and buttons | D | P1a (buttons in P1a, taps in P1b) | 2-finger tap = undo (< 250 ms, < 10 px, never inside a pinch); buttons always shown; 3-finger redo only if S6 shows the system Undo bar stays away | 0 false fires on 50 recorded pinch traces |
-| NAV-3 | Pencil sculpts | D | P1a | Touches ignored while the pen is down; 'finger sculpts' option | e2e |
+| NAV-3 | Pencil sculpts, fingers navigate | D | P1a | Touches ignored while the pen is down; 'finger sculpts' option | e2e |
 | NAV-4 | View tools | D | P1a (frame/reset in P1a; view cube, ortho, FOV in P3) | Frame, reset, view-cube snaps, ortho/persp, FOV | e2e |
 | NAV-5 | Hold modifiers | D | P2 | Smooth / Invert / Mask hold-buttons (Pencil double-tap, squeeze and barrel roll are not exposed to the web) | e2e |
 | NAV-6 | Radius and strength sliders | D | P1a | Edge sliders with live cursor preview | e2e |
 | NAV-7 | Hardware keyboard | R | P3 | Smooth/invert modifiers, undo/redo, radius, brush hotkeys | e2e |
 | NAV-8 | Pencil hover cursor | R | P7 | Deferred: cannot be verified on the reference device | - |
-| NAV-9 | Left-handed layout | R | P5 | Mirrored layout and UI scale persist | e2e |
+| NAV-9 | Left-handed layout, UI scale | R | P5 | Mirrored layout and UI scale persist | e2e |
 | NAV-10 | Gesture card | D | P1b | Shown on first run; re-openable | e2e |
 | NAV-11 | Adaptive render scale | R | P2 | Lower resolution while interacting if under 60 fps; full when idle | frame harness |
 
@@ -101,12 +102,12 @@ Status is computed from tagged test results and device reports (`npm run verify`
 | STK-3 | Stabilizer | D | P2 | Lazy radius + smoothing, catch-up on lift; jitter RMS -70% (also absorbs pre-26.2 integer coordinates) | jittered trace |
 | STK-4 | Falloff curves and hardness | D | P2 | Presets + custom curve; hardness remap | golden profiles |
 | STK-5 | Screen / world radius | R | P2 | Both modes behave per definition | unit |
-| STK-6 | Front faces only | D | P3 | Thin plate: back untouched; overlapping shells: only the hit shell moves | unit |
+| STK-6 | Front faces only, connected only | D | P3 | Thin plate: back untouched; overlapping shells: only the hit shell moves | unit |
 | STK-7 | Alphas / stamps | R | P4 | Grayscale alpha in the tangent frame; fixed/follow/random rotation; PNG import | golden height image |
 | STK-8 | Brush presets | R | P2 | Saved per tool, duplicate, reset | e2e |
 | STK-9 | Drag-dot, roll, line, anchored | R | P4 | Each stroke method behaves per definition | unit |
 | STK-10 | Brush cursor | D | P1a | Surface-aligned ring with radius/strength preview | visual snapshot |
-| STK-11 | Plane sampling | D | P2 | Area normal/plane from verts in radius (front-facing wins); per-brush accumulate flag; auto-smooth factor | golden |
+| STK-11 | Plane sampling, accumulate, auto-smooth | D | P2 | Area normal/plane from verts in radius (front-facing wins); per-brush accumulate flag; auto-smooth factor | golden |
 | STK-12 | Curve strokes | R | P6 | Re-applying an edited curve = same result as drawing it | unit |
 
 ## BRS · Brushes
@@ -183,7 +184,7 @@ Status is computed from tagged test results and device reports (`npm run verify`
 | XFM-1 | Object gizmo | D | P2 | Move/rotate/scale, local/world, numeric entry | e2e |
 | XFM-2 | Mask-aware gizmo (posing) | D | P3 | Masked area fixed exactly; smooth transition at the mask edge | unit |
 | XFM-3 | Snapping | R | P3 | 15-degree rotation and grid snaps | unit |
-| XFM-4 | Apply transform | R | P3 | Each exact | unit |
+| XFM-4 | Apply transform, reset origin, mirror object | R | P3 | Each exact | unit |
 
 ## BOO · Booleans and trimming
 
@@ -202,7 +203,7 @@ Status is computed from tagged test results and device reports (`npm run verify`
 | PNT-3 | Matcaps | D | P1a (one matcap in P1a; library >= 8 + import in P5) | Rendered with Blender at build time | visual snapshot |
 | PNT-4 | PBR + HDRI | R | P5 | >= 4 environments prefiltered at build; exposure, rotation | visual snapshot |
 | PNT-5 | SSAO, curvature, outline, AgX, FXAA | R | P5 | 60-fps polycount with SSAO >= 85% of without | frame harness |
-| PNT-6 | Wireframe | R | P3 | Wireframe shows polygon runs (quads), not triangles | visual snapshot |
+| PNT-6 | Wireframe, flat/smooth | R | P3 | Wireframe shows polygon runs (quads), not triangles | visual snapshot |
 | PNT-7 | Background | R | P5 | Color, gradient, environment | e2e |
 | PNT-8 | UV texture painting | N | P7 | Deferred: needs UV unwrap; vertex paint covers sculpt coloring | - |
 

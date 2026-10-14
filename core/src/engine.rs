@@ -754,7 +754,7 @@ mod tests {
     }
 
     #[test]
-    fn draw_stroke_is_local_mirror_exact_and_undoable() {
+    fn brs1_sym1_und1_draw_stroke_is_local_mirror_exact_and_undoable() {
         let mut e = engine(48);
         let partner = mirror_partner(&e.mesh);
         let h0 = e.mesh.position_hash();
@@ -787,7 +787,7 @@ mod tests {
     }
 
     #[test]
-    fn draw_moves_center_outward_by_expected_amount() {
+    fn brs1_draw_moves_center_outward_by_expected_amount() {
         let mut e = engine(64);
         e.brush.symmetry_x = false;
         e.brush.tool = Tool::Draw;
@@ -808,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn smooth_preserves_volume_within_one_percent() {
+    fn brs2_smooth_preserves_volume_within_one_percent() {
         let mut e = engine(48);
         e.brush.symmetry_x = false;
         let vol = |m: &EditMesh| -> f64 {
@@ -836,7 +836,7 @@ mod tests {
     }
 
     #[test]
-    fn grab_moves_anchor_with_the_pencil() {
+    fn brs3_grab_moves_anchor_with_the_pencil() {
         let mut e = engine(48);
         e.brush.tool = Tool::Grab;
         e.brush.symmetry_x = false;
@@ -855,7 +855,7 @@ mod tests {
     }
 
     #[test]
-    fn journal_replays_to_the_same_state() {
+    fn prj3_journal_replays_to_the_same_state() {
         let mut e = engine(40);
         let start = e.mesh.positions.clone();
         let mut records = Vec::new();
@@ -881,7 +881,7 @@ mod tests {
     }
 
     #[test]
-    fn frame_update_and_checkpoint_ranges_cover_moved_vertices() {
+    fn prj3_frame_update_and_checkpoint_ranges_cover_moved_vertices() {
         let mut e = engine(48);
         e.stroke_begin(400.0, 400.0, 1.0);
         e.stroke_move(&[420.0, 410.0, 1.0]);
