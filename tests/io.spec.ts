@@ -121,6 +121,12 @@ test('IMP-1 IMP-2 IMP-0 PRJ-9 EXP-2: import fixtures (picker + drop), units surv
     await expect(page.locator('.notice')).toContainText('imports .obj and .stl');
     expect((await stats(page)).verts).toBe(r3.verts);
   } finally {
+    // OPFS is shared between WebKit profiles here (app.spec then opened this test's last import):
+    // leave the default sphere as the last project, as a fresh app has it.
+    try {
+      await page.evaluate(() => (window as any).__maquette.send({ type: 'new-sphere', n: 96 }));
+      await page.waitForFunction(() => (window as any).__maquette.ui.stats.value?.tris === 110592, null, { timeout: 20_000 });
+    } catch {}
     results.pageErrors = errors;
     mkdirSync('test-results', { recursive: true });
     writeFileSync('test-results/io-webkit.json', JSON.stringify(results, null, 1));
