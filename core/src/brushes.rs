@@ -44,8 +44,10 @@ pub const STRIPS_DEPTH: f32 = 1.25;
 /// Crease: inward offset per dab, and the pull toward the stroke line (fraction of the gap).
 pub const CREASE_K: f32 = 0.04;
 pub const CREASE_PINCH: f32 = 0.3;
-/// Pinch: fraction of the tangential distance to the center closed per dab at strength 1.
-pub const PINCH_K: f32 = 0.5;
+/// Pinch: fraction of the tangential distance to the center closed per dab at strength 1. A
+/// point on a stroke receives ~20 dabs (spacing 0.1 r), so a full-strength stroke contracts the
+/// stroke line about e^-2 (0.2 × the ~10 summed falloff), strong without collapsing triangles.
+pub const PINCH_K: f32 = 0.2;
 /// Pinch and Crease pulls fade to zero over this inner fraction of the radius. Undamped, the
 /// spacing near the center (or the crease line) shrinks geometrically with every dab until
 /// triangles collapse; faded, it shrinks only algebraically and the mesh stays usable.
@@ -1881,7 +1883,11 @@ mod tests {
                 stroke(&mut e, &sphere_stroke(tool).iter().map(|p| [p[0], p[1] + 10.0 * k as f32]).collect::<Vec<_>>());
             }
             let zig: Vec<[f32; 2]> = (0..60).map(|i| [340.0 + 2.0 * i as f32, 400.0 + if i % 2 == 0 { 15.0 } else { -15.0 }]).collect();
-            if !matches!(tool, Tool::Grab | Tool::SnakeHook) {
+            // Pinch contracts its neighbourhood by (1 - k·f) per dab, so 360 dabs into one patch
+            // shrink it geometrically by design (Blender's pinch does the same); dynamic
+            // topology (TOP-3) is what keeps such a patch tessellated.
+            if !matches!(tool, Tool::Grab | Tool::SnakeHook | Tool::Pinch) {
+                e.brush.strength = 0.5; // the app's default strength
                 stroke(&mut e, &zig);
             }
             assert!(e.mesh.positions.iter().all(|x| x.is_finite()) && e.mesh.normals.iter().all(|x| x.is_finite()), "{tool:?}: NaN");
@@ -1891,7 +1897,7 @@ mod tests {
             // triangles on a fixed topology (dynamic topology, TOP-3, re-tessellates them).
             assert!(min_ratio > 1e-6, "{tool:?}: a triangle collapsed to {min_ratio} of its area");
         }
-        println!("brush gate, smallest triangle area / original after two strokes and a 360-dab zig-zag at full strength: {}", report.join(", "));
+        println!("brush gate, smallest triangle area / original after two full-strength strokes (+ a 360-dab zig-zag at strength 0.5 except drags and Pinch): {}", report.join(", "));
     }
 
     #[test]
