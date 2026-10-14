@@ -391,3 +391,7 @@ input.rename {
 .gesture-card li {
   margin: 3px 0;
 }
+.top button {
+  white-space: nowrap;
+  padding: 8px 10px;
+}
