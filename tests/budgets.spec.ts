@@ -101,8 +101,12 @@ async function open(ctx: BrowserContext): Promise<Page> {
 }
 const budgetOf = (page: Page) => page.evaluate(() => (window as any).__maquette.budget.state.value as BudgetState);
 
-/** Writes JSON files into the dev channel's OPFS root from a page that isn't running the app,
- *  through a sync access handle in a worker (what the persist worker uses). */
+/** Writes (or, for null, deletes) JSON files in the dev channel's OPFS root from a page that isn't
+ *  running the app, through a sync access handle in a worker (what the persist worker uses).
+ *  Playwright's WebKit keeps OPFS per origin under ~/Library/WebKit/org.webkit.Playwright, shared by
+ *  every persistent profile, so each test starts by deleting the budget state it depends on. */
+const FRESH = { 'budget.json': null, 'session.json': null, 'stress-marker.json': null };
+
 async function writeOpfs(ctx: BrowserContext, files: Record<string, unknown>): Promise<void> {
   const page = await ctx.newPage();
   await page.goto(BASE + 'manifest.webmanifest');
@@ -111,6 +115,10 @@ async function writeOpfs(ctx: BrowserContext, files: Record<string, unknown>): P
       const root = await navigator.storage.getDirectory();
       const dir = await root.getDirectoryHandle('app-dev', { create: true });
       for (const [name, value] of Object.entries(e.data)) {
+        if (value === null) {
+          await dir.removeEntry(name).catch(() => {});
+          continue;
+        }
         const fh = await dir.getFileHandle(name, { create: true });
         let h = null;
         for (let i = 0; i < 40 && !h; i++) {
@@ -136,6 +144,7 @@ test('PLT-8: the learned budget is shown with its source and drives the pre-flig
   const profile = mkdtempSync(join(tmpdir(), 'maquette-plt8-'));
   const ctx = await webkit.launchPersistentContext(profile, { viewport: { width: 1180, height: 820 } });
   try {
+    await writeOpfs(ctx, FRESH);
     let page = await open(ctx);
     let b = await budgetOf(page);
     expect([b.budgetMB, b.basis]).toEqual([1459, 'prior']);
@@ -163,7 +172,7 @@ test('PLT-8: the learned budget is shown with its source and drives the pre-flig
     expect(refusal).toContain("over this iPad's 1,313 MB budget (learned over 1 session");
     expect((await page.evaluate(() => (window as any).__maquette.query())).stats.tris).toBe(110592); // nothing was built
     await page.getByRole('button', { name: 'New' }).click();
-    await expect(page.getByText('MB budget (learned over 1 session')).toBeVisible();
+    await expect(page.locator('.sheet')).toContainText('of a 1,313 MB budget (learned over 1 session');
     await page.close();
 
     // Three clean sessions above 90%: +5%.
@@ -186,6 +195,7 @@ test('PLT-8: speed benchmark measures the brush pipeline and sets the comfortabl
   const profile = mkdtempSync(join(tmpdir(), 'maquette-plt8b-'));
   const ctx = await webkit.launchPersistentContext(profile, { viewport: { width: 1180, height: 820 } });
   try {
+    await writeOpfs(ctx, FRESH);
     let page = await open(ctx);
     const t0 = Date.now();
     const r = await page.evaluate(() => (window as any).__maquette.budget.runBench());
@@ -214,6 +224,7 @@ test('PLT-8: stress test: deliberate exit, durable marker, budget = 0.6 x what t
   const profile = mkdtempSync(join(tmpdir(), 'maquette-plt8s-'));
   let ctx = await webkit.launchPersistentContext(profile, { viewport: { width: 1180, height: 820 } });
   try {
+    await writeOpfs(ctx, FRESH);
     let page = await open(ctx);
     await page.getByRole('button', { name: 'Settings' }).click();
     await page.getByRole('button', { name: 'Stress-test this iPad…' }).click();
