@@ -3,66 +3,23 @@
 //! inside the stroke's node transaction (invariant 3); `frame_update` turns what moved into
 //! normals, BVH bounds and GPU upload commands.
 //!
-//! Symmetric dabs are computed from one snapshot and applied together, so a mirrored stroke is
-//! mirror-exact (SYM-1), and strength is feathered where the two dabs overlap (no double
-//! strength at the plane).
+//! The brushes themselves (deform primitives, the shared factor pipeline, symmetry) live in
+//! `brushes.rs`; this file is the stroke engine around them: dab spacing, pressure, the
+//! transaction, undo/redo, journal records, frames and checkpoints.
 
+use crate::brushes::{BrushStroke, OrigNormals, SlotMap};
 use crate::bvh::NONE;
 use crate::gpu::Gpu;
 use crate::history::{encode_record, History, LeafStates, Transaction, UndoEntry, KIND_REDO, KIND_STROKE, KIND_UNDO};
-use crate::math::{add, dot, falloff_smooth, get3, normalize, scale, set3, sub};
+use crate::math::{dot, normalize, sub};
 use crate::mesh::{EditMesh, Hit};
 
-pub const DRAW_K: f32 = 0.04;
-pub const SMOOTH_LAMBDA: f32 = 0.5;
-pub const TAUBIN_MU: f32 = -0.53;
+pub use crate::brushes::{Brush, Falloff, Tool, DRAW_K, SMOOTH_LAMBDA, TAUBIN_MU};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Tool {
-    Draw = 0,
-    Smooth = 1,
-    Grab = 2,
-}
-
-impl Tool {
-    pub fn from_u32(t: u32) -> Tool {
-        match t {
-            1 => Tool::Smooth,
-            2 => Tool::Grab,
-            _ => Tool::Draw,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct Brush {
-    pub tool: Tool,
-    pub radius_px: f32,
-    pub strength: f32,
-    pub pressure_radius: bool,
-    pub pressure_strength: bool,
-    pub gamma: f32,
-    /// Dab spacing as a fraction of the dab radius (STK-1).
-    pub spacing: f32,
-    pub symmetry_x: bool,
-    pub preserve_volume: bool,
-}
-
-impl Default for Brush {
-    fn default() -> Brush {
-        Brush {
-            tool: Tool::Draw,
-            radius_px: 50.0,
-            strength: 0.5,
-            pressure_radius: false,
-            pressure_strength: true,
-            gamma: 1.0,
-            spacing: 0.1,
-            symmetry_x: true,
-            preserve_volume: true,
-        }
-    }
-}
+#[cfg(test)]
+use crate::brushes::mirror;
+#[cfg(test)]
+use crate::math::{falloff_smooth, get3};
 
 /// Camera as the renderer sees it (26 floats from JS): inverse view-projection (column-major),
 /// eye, forward, viewport width/height in pixels, world units per pixel at unit depth.
@@ -148,57 +105,17 @@ impl StampSet {
     }
 }
 
-/// Vertex -> slot map for combining symmetric dabs.
-struct SlotMap {
-    stamp: Vec<u32>,
-    slot: Vec<u32>,
-    id: u32,
-    verts: Vec<u32>,
-}
-
-impl SlotMap {
-    fn new(n: usize) -> SlotMap {
-        SlotMap { stamp: vec![0; n], slot: vec![0; n], id: 1, verts: Vec::new() }
-    }
-    fn clear(&mut self) {
-        self.id = self.id.wrapping_add(1).max(1);
-        self.verts.clear();
-    }
-    #[inline]
-    fn get(&mut self, v: u32) -> (usize, bool) {
-        if self.stamp[v as usize] == self.id {
-            (self.slot[v as usize] as usize, false)
-        } else {
-            self.stamp[v as usize] = self.id;
-            self.slot[v as usize] = self.verts.len() as u32;
-            self.verts.push(v);
-            (self.verts.len() - 1, true)
-        }
-    }
-}
-
-struct Grab {
-    anchor: [f32; 3],
-    n: [f32; 3],
-    verts: Vec<u32>,
-    wp: Vec<f32>,
-    wm: Vec<f32>,
-    orig: Vec<f32>,
-}
-
 #[derive(Default)]
-struct StrokeState {
-    active: bool,
+pub(crate) struct StrokeState {
+    pub active: bool,
+    /// The tool is fixed for the whole stroke: a brush message mid-stroke can't switch a drag
+    /// into dabs halfway.
+    pub tool: Option<Tool>,
     last: [f32; 3],
     travel: f32,
     p_smooth: f32,
-    grab: Option<Grab>,
-    dabs: u32,
-}
-
-#[inline]
-fn mirror(p: [f32; 3]) -> [f32; 3] {
-    [-p[0], p[1], p[2]]
+    pub dabs: u32,
+    pub brush: BrushStroke,
 }
 
 pub struct Engine {
@@ -213,20 +130,27 @@ pub struct Engine {
     pub ckpt_ranges: Vec<u32>,
     pub ckpt_seq: u32,
     pub last_dab: [f32; 7],
-    modified: StampSet,
+    pub(crate) modified: StampSet,
     normal_set: StampSet,
     gpu_leaves: StampSet,
     refit_leaves: StampSet,
     ckpt_dirty: Vec<u8>,
-    leaves: Vec<u32>,
-    stack: Vec<u32>,
-    sel_v: Vec<u32>,
-    sel_f: Vec<f32>,
-    slots: SlotMap,
-    u_w: Vec<f32>,
-    u_d: Vec<f32>,
-    tmp: Vec<f32>,
-    stroke: StrokeState,
+    // Brush scratch (brushes.rs): the selection (vertex ids, sampling positions, squared
+    // distances, normals), per-vertex slots and per-mirror terms of a symmetric dab.
+    pub(crate) leaves: Vec<u32>,
+    pub(crate) stack: Vec<u32>,
+    pub(crate) sel_v: Vec<u32>,
+    pub(crate) sel_p: Vec<f32>,
+    pub(crate) sel_d2: Vec<f32>,
+    pub(crate) sel_n: Vec<f32>,
+    pub(crate) slots: SlotMap,
+    pub(crate) terms: Vec<f32>,
+    pub(crate) u_w: Vec<f32>,
+    pub(crate) tmp: Vec<f32>,
+    pub(crate) orig_n: OrigNormals,
+    /// Upper bound on how far any vertex moved since the BVH was last refit (widens selections).
+    pub(crate) stale: f32,
+    pub(crate) stroke: StrokeState,
 }
 
 impl Engine {
@@ -255,196 +179,18 @@ impl Engine {
             leaves: Vec::new(),
             stack: Vec::new(),
             sel_v: Vec::new(),
-            sel_f: Vec::new(),
+            sel_p: Vec::new(),
+            sel_d2: Vec::new(),
+            sel_n: Vec::new(),
             slots: SlotMap::new(nv),
+            terms: Vec::new(),
             u_w: Vec::new(),
-            u_d: Vec::new(),
             tmp: Vec::new(),
+            orig_n: OrigNormals::new(nl),
+            stale: 0.0,
             stroke: StrokeState::default(),
             mesh,
         }
-    }
-
-    // ---------- selection ----------
-
-    fn select(&mut self, c: [f32; 3], r: f32) {
-        self.mesh.bvh.query_sphere(c, r, &mut self.leaves, &mut self.stack);
-        self.sel_v.clear();
-        self.sel_f.clear();
-        let r2 = r * r;
-        for &leaf in &self.leaves {
-            let (a, b) = self.mesh.leaf_range(leaf as usize);
-            for v in a..b {
-                let d = sub(get3(&self.mesh.positions, v), c);
-                let d2 = dot(d, d);
-                if d2 < r2 {
-                    self.sel_v.push(v as u32);
-                    self.sel_f.push(falloff_smooth(1.0 - d2.sqrt() / r));
-                }
-            }
-        }
-    }
-
-    /// Dab centers with their feather weights: overlapping mirrored dabs share strength.
-    fn centers(&self, c: [f32; 3], r: f32) -> ([[f32; 3]; 2], [f32; 2], usize) {
-        if !self.brush.symmetry_x {
-            return ([c, c], [1.0, 0.0], 1);
-        }
-        let overlap = (1.0 - c[0].abs() / r).max(0.0);
-        let w = 1.0 / (1.0 + overlap);
-        ([c, mirror(c)], [w, w], 2)
-    }
-
-    /// Falloff-weighted average of front-facing vertex normals in the current selection.
-    fn area_normal(&self, c: [f32; 3], fallback: [f32; 3]) -> [f32; 3] {
-        let to_eye = sub(self.cam.eye, c);
-        let mut n = [0.0f32; 3];
-        for (i, &v) in self.sel_v.iter().enumerate() {
-            let nv = get3(&self.mesh.normals, v as usize);
-            if dot(nv, to_eye) > 0.0 {
-                n = add(n, scale(nv, self.sel_f[i]));
-            }
-        }
-        let n = normalize(n);
-        if n == [0.0; 3] { fallback } else { n }
-    }
-
-    fn touch_and_mark(&mut self, v: u32) {
-        let leaf = self.mesh.leaf_of_vertex[v as usize];
-        if leaf != NONE {
-            self.tx.touch(&self.mesh, leaf);
-        }
-        self.modified.insert(v);
-    }
-
-    // ---------- dabs ----------
-
-    pub fn dab_draw(&mut self, c: [f32; 3], r: f32, s: f32, hit_normal: [f32; 3]) {
-        let (cs, ws, n) = self.centers(c, r);
-        self.slots.clear();
-        self.u_d.clear();
-        let mut normal = [0.0; 3];
-        for k in 0..n {
-            self.select(cs[k], r);
-            if k == 0 {
-                normal = self.area_normal(c, hit_normal);
-            }
-            let nk = if k == 0 { normal } else { mirror(normal) };
-            let amp = r * s * DRAW_K * ws[k];
-            for i in 0..self.sel_v.len() {
-                let (slot, new) = self.slots.get(self.sel_v[i]);
-                if new {
-                    self.u_d.extend_from_slice(&[0.0; 3]);
-                }
-                let f = amp * self.sel_f[i];
-                for a in 0..3 {
-                    self.u_d[3 * slot + a] += nk[a] * f;
-                }
-            }
-        }
-        for i in 0..self.slots.verts.len() {
-            let v = self.slots.verts[i];
-            self.touch_and_mark(v);
-            let p = add(get3(&self.mesh.positions, v as usize), get3(&self.u_d, i));
-            set3(&mut self.mesh.positions, v as usize, p);
-        }
-    }
-
-    pub fn dab_smooth(&mut self, c: [f32; 3], r: f32, s: f32) {
-        let (cs, ws, n) = self.centers(c, r);
-        self.slots.clear();
-        self.u_w.clear();
-        for k in 0..n {
-            self.select(cs[k], r);
-            for i in 0..self.sel_v.len() {
-                let (slot, new) = self.slots.get(self.sel_v[i]);
-                if new {
-                    self.u_w.push(0.0);
-                }
-                self.u_w[slot] += self.sel_f[i] * ws[k];
-            }
-        }
-        for i in 0..self.slots.verts.len() {
-            let v = self.slots.verts[i];
-            self.touch_and_mark(v);
-        }
-        self.smooth_pass(SMOOTH_LAMBDA * s);
-        if self.brush.preserve_volume {
-            self.smooth_pass(TAUBIN_MU * s);
-        }
-    }
-
-    /// One Jacobi Laplacian pass over the slot vertices: p += k·w·(avg(neighbors) - p).
-    fn smooth_pass(&mut self, k: f32) {
-        self.tmp.clear();
-        for i in 0..self.slots.verts.len() {
-            let v = self.slots.verts[i] as usize;
-            let nb = self.mesh.neighbors(v);
-            let p = get3(&self.mesh.positions, v);
-            if nb.is_empty() {
-                self.tmp.extend_from_slice(&p);
-                continue;
-            }
-            let mut avg = [0.0f32; 3];
-            for &w in nb {
-                avg = add(avg, get3(&self.mesh.positions, w as usize));
-            }
-            let avg = scale(avg, 1.0 / nb.len() as f32);
-            let f = (k * self.u_w[i].min(1.0)).clamp(-1.0, 1.0);
-            self.tmp.extend_from_slice(&add(p, scale(sub(avg, p), f)));
-        }
-        for i in 0..self.slots.verts.len() {
-            let v = self.slots.verts[i] as usize;
-            set3(&mut self.mesh.positions, v, get3(&self.tmp, i));
-        }
-    }
-
-    fn grab_begin(&mut self, anchor: [f32; 3], r: f32) {
-        let (cs, ws, n) = self.centers(anchor, r);
-        self.slots.clear();
-        let mut wp = Vec::new();
-        let mut wm = Vec::new();
-        for k in 0..n {
-            self.select(cs[k], r);
-            for i in 0..self.sel_v.len() {
-                let (slot, new) = self.slots.get(self.sel_v[i]);
-                if new {
-                    wp.push(0.0);
-                    wm.push(0.0);
-                }
-                let w = self.sel_f[i] * ws[k];
-                if k == 0 { wp[slot] += w } else { wm[slot] += w }
-            }
-        }
-        let verts = self.slots.verts.clone();
-        let mut orig = Vec::with_capacity(verts.len() * 3);
-        for &v in &verts {
-            orig.extend_from_slice(&get3(&self.mesh.positions, v as usize));
-            let leaf = self.mesh.leaf_of_vertex[v as usize];
-            if leaf != NONE {
-                self.tx.touch(&self.mesh, leaf);
-            }
-        }
-        self.stroke.grab = Some(Grab { anchor, n: scale(self.cam.forward, -1.0), verts, wp, wm, orig });
-    }
-
-    fn grab_move(&mut self, x: f32, y: f32) {
-        let Some(g) = self.stroke.grab.take() else { return };
-        let (o, d) = self.cam.ray(x, y);
-        let denom = dot(d, g.n);
-        if denom.abs() > 1e-6 {
-            let t = dot(sub(g.anchor, o), g.n) / denom;
-            let p = add(o, scale(d, t));
-            let delta = scale(sub(p, g.anchor), self.brush.strength);
-            let md = mirror(delta);
-            for (i, &v) in g.verts.iter().enumerate() {
-                let q = add(add(get3(&g.orig, i), scale(delta, g.wp[i])), scale(md, g.wm[i]));
-                set3(&mut self.mesh.positions, v as usize, q);
-                self.modified.insert(v);
-            }
-            self.last_dab = [g.anchor[0] + delta[0], g.anchor[1] + delta[1], g.anchor[2] + delta[2], g.n[0], g.n[1], g.n[2], self.last_dab[6]];
-        }
-        self.stroke.grab = Some(g);
     }
 
     // ---------- strokes (STK-1, STK-2) ----------
@@ -453,7 +199,7 @@ impl Engine {
         p.clamp(0.0, 1.0).powf(self.brush.gamma.max(0.05))
     }
 
-    fn radius_px_at(&self, p: f32) -> f32 {
+    pub(crate) fn radius_px_at(&self, p: f32) -> f32 {
         if self.brush.pressure_radius {
             self.brush.radius_px * (0.25 + 0.75 * self.pressure(p))
         } else {
@@ -461,37 +207,73 @@ impl Engine {
         }
     }
 
+    pub(crate) fn dab_strength(&self, p: f32) -> f32 {
+        self.brush.strength * if self.brush.pressure_strength { self.pressure(p) } else { 1.0 }
+    }
+
     pub fn raycast_screen(&self, x: f32, y: f32) -> Option<Hit> {
         let (o, d) = self.cam.ray(x, y);
         self.mesh.raycast(o, d)
     }
 
-    /// One dab at a screen point. Returns whether it hit the surface.
+    fn stroke_tool(&self) -> Tool {
+        self.stroke.tool.unwrap_or(self.brush.tool)
+    }
+
+    /// One dab at a screen point. Returns whether it landed (hit the surface, or for Snake Hook
+    /// moved the hook).
     fn dab_at(&mut self, x: f32, y: f32, p: f32) -> bool {
+        let tool = self.stroke_tool();
+        if tool == Tool::SnakeHook {
+            return self.snake_dab(x, y, p);
+        }
         let Some(hit) = self.raycast_screen(x, y) else { return false };
         let r = self.cam.world_radius(self.radius_px_at(p), hit.point);
-        let s = self.brush.strength * if self.brush.pressure_strength { self.pressure(p) } else { 1.0 };
-        match self.brush.tool {
-            Tool::Draw => self.dab_draw(hit.point, r, s, hit.normal),
-            Tool::Smooth => self.dab_smooth(hit.point, r, s),
-            Tool::Grab => {}
-        }
+        let s = self.dab_strength(p);
+        self.dab(tool, hit.point, r, s, hit.normal);
         self.last_dab = [hit.point[0], hit.point[1], hit.point[2], hit.normal[0], hit.normal[1], hit.normal[2], r];
         self.stroke.dabs += 1;
         true
     }
 
-    pub fn stroke_begin(&mut self, x: f32, y: f32, p: f32) -> bool {
-        self.tx.begin();
-        self.stroke = StrokeState { active: true, last: [x, y, p], travel: 0.0, p_smooth: p, grab: None, dabs: 0 };
-        if self.brush.tool == Tool::Grab {
-            let Some(hit) = self.raycast_screen(x, y) else { return false };
-            let r = self.cam.world_radius(self.brush.radius_px, hit.point);
-            self.last_dab = [hit.point[0], hit.point[1], hit.point[2], hit.normal[0], hit.normal[1], hit.normal[2], r];
-            self.grab_begin(hit.point, r);
-            return true;
+    /// Refits the bounds of leaves whose vertices moved since the last frame (undo, redo and
+    /// journal records can land between frames), so a new stroke never selects from bounds
+    /// that miss where the vertices are now. Normals and GPU upload still happen in the frame.
+    fn refit_pending(&mut self) {
+        if !self.modified.list.is_empty() {
+            self.refit_leaves.clear();
+            for i in 0..self.modified.list.len() {
+                let v = self.modified.list[i] as usize;
+                for j in self.mesh.topo.vt_off[v] as usize..self.mesh.topo.vt_off[v + 1] as usize {
+                    let t = self.mesh.topo.vt[j] as usize;
+                    self.refit_leaves.insert(self.mesh.leaf_of_tri[t]);
+                }
+            }
+            let refit = std::mem::take(&mut self.refit_leaves.list);
+            self.mesh.bvh.refit_leaves(&self.mesh.positions, &self.mesh.tris, &refit);
+            self.refit_leaves.list = refit;
+            self.mesh.bvh.refit_internal();
         }
-        self.dab_at(x, y, p)
+        self.stale = 0.0;
+    }
+
+    pub fn stroke_begin(&mut self, x: f32, y: f32, p: f32) -> bool {
+        self.refit_pending();
+        self.tx.begin();
+        self.orig_n.begin(self.mesh.nleaves());
+        let tool = self.brush.tool;
+        self.stroke = StrokeState { active: true, tool: Some(tool), last: [x, y, p], travel: 0.0, p_smooth: p, dabs: 0, brush: BrushStroke::default() };
+        match tool {
+            Tool::Grab => {
+                let Some(hit) = self.raycast_screen(x, y) else { return false };
+                let r = self.cam.world_radius(self.brush.radius_px, hit.point);
+                self.last_dab = [hit.point[0], hit.point[1], hit.point[2], hit.normal[0], hit.normal[1], hit.normal[2], r];
+                self.grab_begin(hit.point, r);
+                true
+            }
+            Tool::SnakeHook => self.snake_begin(x, y, p),
+            _ => self.dab_at(x, y, p),
+        }
     }
 
     /// Samples: [x, y, pressure] triples (coalesced Pencil samples). Returns dabs applied.
@@ -500,11 +282,12 @@ impl Engine {
             return 0;
         }
         let before = self.stroke.dabs;
+        let grab = self.stroke_tool() == Tool::Grab;
         for s in samples.chunks_exact(3) {
             let (x, y) = (s[0], s[1]);
             let p = self.stroke.p_smooth * 0.6 + s[2] * 0.4; // pressure smoothing (STK-2)
             self.stroke.p_smooth = p;
-            if self.brush.tool == Tool::Grab {
+            if grab {
                 self.grab_move(x, y);
                 self.stroke.last = [x, y, p];
                 continue;
@@ -540,7 +323,8 @@ impl Engine {
             return 0;
         }
         self.stroke.active = false;
-        self.stroke.grab = None;
+        self.stroke.tool = None;
+        self.stroke.brush = BrushStroke::default();
         self.tx.active = false;
         if self.tx.touched().is_empty() {
             self.out.clear();
@@ -637,6 +421,7 @@ impl Engine {
         self.mesh.bvh.refit_leaves(&self.mesh.positions, &self.mesh.tris, &refit);
         self.refit_leaves.list = refit;
         self.mesh.bvh.refit_internal();
+        self.stale = 0.0;
         let mut dirty = std::mem::take(&mut self.gpu_leaves.list);
         self.gpu.update(&self.mesh, &mut dirty);
         self.gpu_leaves.list = dirty;

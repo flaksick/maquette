@@ -2,6 +2,7 @@
 //! The same code is tested natively (`cargo test`) and shipped as WebAssembly.
 
 pub mod abi;
+pub mod brushes;
 pub mod bvh;
 pub mod engine;
 pub mod gpu;

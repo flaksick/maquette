@@ -73,6 +73,8 @@ impl LeafStates {
 /// The per-stroke transaction: which leaves were touched and their before-state.
 pub struct Transaction {
     stamp: Vec<u32>,
+    /// Index of each touched leaf in `before` (valid where stamp == id).
+    slot: Vec<u32>,
     id: u32,
     pub before: LeafStates,
     pub active: bool,
@@ -80,7 +82,7 @@ pub struct Transaction {
 
 impl Transaction {
     pub fn new(nleaves: usize) -> Transaction {
-        Transaction { stamp: vec![0; nleaves], id: 1, before: LeafStates::default(), active: false }
+        Transaction { stamp: vec![0; nleaves], slot: vec![0; nleaves], id: 1, before: LeafStates::default(), active: false }
     }
 
     pub fn begin(&mut self) {
@@ -96,6 +98,7 @@ impl Transaction {
             return;
         }
         self.stamp[leaf as usize] = self.id;
+        self.slot[leaf as usize] = self.before.leaves.len() as u32;
         let (a, b) = mesh.leaf_range(leaf as usize);
         self.before.leaves.push(leaf);
         self.before.data.extend_from_slice(&mesh.positions[3 * a..3 * b]);
@@ -104,6 +107,17 @@ impl Transaction {
 
     pub fn touched(&self) -> &[u32] {
         &self.before.leaves
+    }
+
+    /// Stroke-start positions of a leaf's vertices if this transaction touched it: brushes that
+    /// sample the stroke-start surface (Layer, accumulate off) read them here.
+    #[inline]
+    pub fn original_leaf(&self, leaf: u32) -> Option<&[f32]> {
+        if !self.active || self.stamp[leaf as usize] != self.id {
+            return None;
+        }
+        let i = self.slot[leaf as usize] as usize;
+        Some(&self.before.data[self.before.off[i] as usize..self.before.off[i + 1] as usize])
     }
 }
 

@@ -303,12 +303,6 @@ pub struct Plane {
     pub normal: [f32; 3],
 }
 
-impl Plane {
-    fn mirrored(self, m: u8) -> Plane {
-        Plane { point: flip(self.point, m), normal: flip(self.normal, m) }
-    }
-}
-
 /// Position of v at stroke start: the transaction's before-state if its leaf was touched,
 /// otherwise the current position (an untouched leaf has not moved this stroke).
 #[inline]
