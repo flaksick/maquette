@@ -14,26 +14,63 @@ export function setAutoUpdate(on: boolean): void {
   setPref({ autoUpdate: on });
 }
 
-async function status(): Promise<void> {
-  const ctl = navigator.serviceWorker?.controller;
-  if (!ctl) return;
+interface SwStatus {
+  version?: string | null;
+  verified?: boolean;
+  files?: number;
+  layout?: string | null;
+  pending?: string | null;
+  reverted?: { from: string; to: string; t: string } | null;
+}
+/** The version Maquette went back to after a release failed to start twice (PLT-3). */
+export const reverted = signal<{ from: string; to: string; t: string } | null>(null);
+
+/** One request to the service worker in charge (or the active one before it controls this page). */
+async function ask<T>(msg: Record<string, unknown>, timeoutMs = 3000): Promise<T | null> {
+  const w = navigator.serviceWorker?.controller ?? (await navigator.serviceWorker?.getRegistration())?.active;
+  if (!w) return null;
   const ch = new MessageChannel();
-  const info = await new Promise<{ version?: string; verified?: boolean; files?: number } | null>((resolve) => {
-    const t = setTimeout(() => resolve(null), 3000);
+  return new Promise<T | null>((resolve) => {
+    const t = setTimeout(() => resolve(null), timeoutMs);
     ch.port1.onmessage = (e) => {
       clearTimeout(t);
-      resolve(e.data);
+      resolve(e.data as T);
     };
-    ctl.postMessage({ type: 'status' }, [ch.port2]);
+    w.postMessage(msg, [ch.port2]);
   });
-  if (info) offline.value = { ready: !!info.verified, version: info.version ?? null, files: info.files ?? 0 };
+}
+
+async function status(): Promise<void> {
+  if (!navigator.serviceWorker?.controller) return;
+  const info = await ask<SwStatus>({ type: 'status' });
+  if (!info) return;
+  offline.value = { ready: !!info.verified, version: info.version ?? null, files: info.files ?? 0 };
+  if (info.pending) updateWaiting.value = true;
+  reverted.value = info.reverted ?? null;
+}
+
+/** PLT-3 boot health: this version opened a project, so the worker marks it good (until then, two
+ *  failed launches send Maquette back to the previous good version). */
+let bootOk = false;
+export async function reportBootOk(): Promise<void> {
+  if (bootOk || !('serviceWorker' in navigator)) return;
+  const r = await ask<{ good?: boolean }>({ type: 'boot-ok', entry: import.meta.url });
+  if (r?.good) bootOk = true;
+}
+
+/** Asks the worker to look for a new version (versions.json) and download + verify it. */
+async function checkVersions(): Promise<{ status?: string; error?: string } | null> {
+  return ask({ type: 'check-update' }, 120_000);
 }
 
 export async function registerServiceWorker(): Promise<void> {
   if (!('serviceWorker' in navigator)) return;
   try {
     const reg = await navigator.serviceWorker.register('./sw.js', { scope: './', updateViaCache: 'none' });
-    navigator.serviceWorker.addEventListener('controllerchange', () => void status());
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      void status();
+      void reportBootOk(); // a first visit is controlled only once the worker activates
+    });
     const watch = (w: ServiceWorker | null) =>
       w?.addEventListener('statechange', () => {
         if (w.state === 'installed' && navigator.serviceWorker.controller) updateWaiting.value = true;
@@ -45,7 +82,10 @@ export async function registerServiceWorker(): Promise<void> {
     await status();
     if (!offline.value.ready) setTimeout(() => void status(), 4000);
     await prefsReady; // the user's choice, not the default, decides the automatic check
-    if (autoUpdate() && navigator.onLine) void reg.update().catch(() => {});
+    if (autoUpdate() && navigator.onLine) {
+      void reg.update().catch(() => {}); // the worker's own code
+      void checkVersions().then(() => status()); // the app's versions (downloaded silently, applied next launch)
+    }
   } catch {
     // No service worker (http on the LAN, private mode): the app still runs, just not offline.
   }
@@ -59,5 +99,10 @@ export async function checkForUpdate(): Promise<string> {
   } catch {
     return 'Couldn’t reach the update server (offline?).';
   }
-  return reg.installing || reg.waiting ? 'Update downloading. It applies the next time you open Maquette.' : 'You have the latest version.';
+  const r = await checkVersions();
+  await status();
+  if (r?.error) return `Update check failed: ${r.error}`;
+  if (r?.status === 'pending' || reg.installing || reg.waiting) return 'An update is downloaded and verified. It applies the next time you open Maquette.';
+  if (r?.status === 'bad') return 'The newest version failed to start on this iPad; Maquette stays on the version that works.';
+  return 'You have the latest version.';
 }

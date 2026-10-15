@@ -332,7 +332,7 @@ fn poly_run(mesh: &EditMesh, t: usize) -> (usize, usize) {
 
 /// Corner j of the fan polygon starting at triangle s (corners: v0, then each triangle's v1/v2).
 #[inline(always)]
-fn poly_corner(mesh: &EditMesh, s: usize, j: usize) -> u32 {
+pub(crate) fn poly_corner(mesh: &EditMesh, s: usize, j: usize) -> u32 {
     if j < 3 { mesh.tris[3 * s + j] } else { mesh.tris[3 * (s + j - 2) + 2] }
 }
 
@@ -698,7 +698,7 @@ impl Engine {
     /// ("front-facing wins"). The weights ignore the brush's falloff so every preset samples the
     /// same plane.
     fn area_plane(&mut self, c: [f32; 3], r: f32, original: bool, fallback: Plane) -> Plane {
-        let to_eye = sub(self.cam.eye, c);
+        let to_eye = self.cam.to_eye(c);
         let r2 = r * r;
         let mut nacc = [[0.0f32; 3]; 2];
         let mut pacc = [[0.0f32; 3]; 2];

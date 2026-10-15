@@ -2,7 +2,7 @@
 // also saved with the project by the engine; this keeps the last-used values for new projects).
 import { signal } from '@preact/signals';
 import { bus } from './bus';
-import type { BrushState, FalloffName, RecoveryInfo, Stats, ToolName } from './shared/protocol';
+import type { BrushState, FalloffName, RecoveryInfo, Stats, ToolName, ViewState } from './shared/protocol';
 
 export interface ToolSetting {
   radius: number;
@@ -52,6 +52,12 @@ export const ui = {
   tool: signal<ToolName>('draw'),
   tools: signal<Record<ToolName, ToolSetting>>({ ...DEFAULTS }),
   symmetry: signal(true),
+  /** Shading and wireframe of the open project (PNT-6); the engine saves it with the view. */
+  view: signal<ViewState>({ shading: 'smooth', wireframe: false }),
+  setView(patch: Partial<ViewState>): void {
+    ui.view.value = { ...ui.view.value, ...patch };
+    bus.send({ type: 'view', view: ui.view.value });
+  },
   symmetryY: signal(false),
   symmetryZ: signal(false),
   gamma: signal(1),

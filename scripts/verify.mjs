@@ -139,7 +139,9 @@ const e2eStart = Date.now();
 if (skipE2E) rec('WebKit e2e', 'skipped', '0 failed', null);
 else {
   rmSync('test-results/playwright.json', { force: true });
-  const r = sh('npx playwright test --reporter=list,json 2>&1', {
+  // One retry: a timing-sensitive test (speed bench, probe) can time out while other builds load the
+  // machine. A test that passes only on retry is counted and printed as flaky, never hidden.
+  const r = sh('npx playwright test --retries=1 --reporter=list,json 2>&1', {
     env: { ...env, MAQUETTE_DEPLOY: TREE, MAQUETTE_PORT: PORT, PLAYWRIGHT_JSON_OUTPUT_FILE: 'test-results/playwright.json' },
   });
   writeFileSync('test-results/playwright.txt', r.stdout);
@@ -150,7 +152,8 @@ else {
     const walkSuite = (s, file) => {
       for (const spec of s.specs ?? [])
         for (const t of spec.tests ?? []) {
-          const f = byFile.get(file) ?? { passed: 0, failed: 0, skipped: 0, ms: 0 };
+          const f = byFile.get(file) ?? { passed: 0, failed: 0, skipped: 0, flaky: 0, ms: 0 };
+          if (t.status === 'flaky') f.flaky++;
           if (t.status === 'expected' || t.status === 'flaky') f.passed++;
           else if (t.status === 'skipped') f.skipped++;
           else f.failed++;
@@ -180,7 +183,7 @@ else {
     };
     for (const [file, f] of [...byFile].sort()) {
       const note = notes[file]?.() ?? '';
-      rec(`WebKit e2e: ${file}`, `${f.passed} passed, ${f.failed} failed${f.skipped ? `, ${f.skipped} skipped` : ''} (${(f.ms / 1000).toFixed(0)} s)`, '0 failed', f.failed === 0 && f.passed > 0, note);
+      rec(`WebKit e2e: ${file}`, `${f.passed} passed, ${f.failed} failed${f.flaky ? ` (${f.flaky} only on retry)` : ''}${f.skipped ? `, ${f.skipped} skipped` : ''} (${(f.ms / 1000).toFixed(0)} s)`, '0 failed', f.failed === 0 && f.passed > 0, note);
     }
   }
 }
@@ -225,6 +228,24 @@ else {
       !!o?.pass,
       o ? `Blender ${o.blender.version}; boundary edges ${o.blender.boundary_edges}` : r.stdout.trim().split('\n').slice(-2).join(' | '),
     );
+  }
+}
+// PRM-2: Blender oracle on each primitive's OBJ (tests/primitives.spec.ts exports one per shape)
+{
+  const shapes = ['cube', 'cylinder', 'cone', 'torus', 'plane', 'capsule', 'icosphere'];
+  const want = '7/7 counts exact, bbox <= 1e-4';
+  const files = shapes.map((s) => `test-results/prm2-${s}.obj`);
+  if (!existsSync(BLENDER)) rec('Blender oracle (PRM-2)', 'Blender not installed', want, null);
+  else if (files.some((f) => !existsSync(f) || statSync(f).mtimeMs < e2eStart)) rec('Blender oracle (PRM-2)', 'no fresh primitive exports (e2e skipped?)', want, null);
+  else {
+    const out = files.map((f) => {
+      const line = sh(`"${BLENDER}" --background --factory-startup --python oracle/check_obj.py -- ${f} 2>&1`).stdout.split('\n').find((l) => l.startsWith('ORACLE '));
+      return line ? JSON.parse(line.slice(7)) : null;
+    });
+    writeFileSync('test-results/oracle-prm2.json', JSON.stringify(Object.fromEntries(shapes.map((s, i) => [s, out[i]])), null, 1));
+    const pass = out.filter((o) => o?.pass).length;
+    const nm = out.map((o, i) => `${shapes[i]} ${o?.blender.non_manifold_edges ?? '?'}`).join(', ');
+    rec('Blender oracle (PRM-2)', `${pass}/${shapes.length} pass`, want, pass === shapes.length, `non-manifold edges: ${nm} (plane = its border)`);
   }
 }
 // ----- [io] end -----

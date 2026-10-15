@@ -3,7 +3,7 @@
 // before reporting it saved, and checkpoints when idle. It renders only when something changed.
 import { Core } from './wasm';
 import { Renderer } from './renderer';
-import { Camera, type V3 } from './camera';
+import { AXIS_VIEWS, Camera, type AxisView, type V3 } from './camera';
 import {
   FALLOFFS,
   TOOL_ID,
@@ -23,9 +23,11 @@ import {
   UNITS,
   UNIT_TO_MM,
   type SessionStartResult,
+  type ViewState,
 } from '../shared/protocol';
 import { LOW_SPACE_BYTES } from '../shared/library';
 import { budgetMB, budgetSource, currentBudget, fits, fmtMB, setBudget } from '../budget';
+import { PRIMITIVE_ID, SHAPES, shapeCounts, type ShapeKind } from '../primitives';
 
 const DEFAULT_SPHERE = 96; // 110,592 triangles
 const LEAF = 1024;
@@ -61,6 +63,15 @@ let highWaterMB = 0;
 let lastStatsPost = 0;
 let stateTimer: ReturnType<typeof setTimeout> | null = null;
 let units: Units = 'm'; // PRJ-9: what one unit means; saved with the view state, default metres
+/** Shading and wireframe (PNT-6): part of the project's view state, default smooth, no wire. */
+let view: ViewState = { shading: 'smooth', wireframe: false };
+/** Sets the view from saved or requested state. The renderer builds wireframe buffers in the
+ *  next uploadAll, or now when `apply` (a toggle on the current mesh). */
+function useView(v: Partial<ViewState> | undefined, apply = false): void {
+  view = { shading: v?.shading === 'flat' ? 'flat' : 'smooth', wireframe: v?.wireframe === true };
+  if (apply) renderer.setView(core, view);
+  else renderer.view = { ...view };
+}
 
 const post = (m: FromEngine, t: Transferable[] = []) => scope.postMessage(m, t);
 
@@ -101,7 +112,7 @@ function ring(): { center: number[]; normal: number[]; radius: number } | null {
     if (core.x.eng_raycast(cam.width / 2, cam.height / 2)) {
       const h = core.f32s(core.x.eng_hit_ptr(), 6);
       const p: V3 = [h[0], h[1], h[2]];
-      return { center: [...p], normal: [h[3], h[4], h[5]], radius: brush.radiusPx * dpr * cam.depthOf(p) * cam.pxToWorld() };
+      return { center: [...p], normal: [h[3], h[4], h[5]], radius: brush.radiusPx * dpr * cam.worldPerPx(p) };
     }
   }
   return null;
@@ -109,6 +120,7 @@ function ring(): { center: number[]; normal: number[]; radius: number } | null {
 
 function frame(): void {
   frameRequested = false;
+  stepSnap(performance.now()); // NAV-4
   if (renderer.lost) {
     renderer.init();
     renderer.uploadAll(core);
@@ -118,6 +130,51 @@ function frame(): void {
   const mb = (core.mem().byteLength + renderer.gpuBytes) / 2 ** 20;
   highWaterMB = Math.max(highWaterMB, mb);
   postStats(false);
+  postCamera(); // NAV-4
+}
+
+// ---------- NAV-4: axis views, projection, and the camera the orb follows ----------
+const SNAP_MS = 180;
+let snap: { y0: number; p0: number; y1: number; p1: number; t0: number; view: AxisView; focal: number; target: V3 } | null = null;
+let lastCamera = '';
+
+/** Turns the camera to an axis view around what is at the centre of the screen (at the scene
+ *  centre's depth), keeping its distance; animated over SNAP_MS, exact at the end. */
+function snapTo(view: AxisView): void {
+  const to = AXIS_VIEWS[view];
+  const focal = cam.depthOf(cam.center);
+  const f = cam.forward();
+  const target: V3 = [cam.eye[0] + f[0] * focal, cam.eye[1] + f[1] * focal, cam.eye[2] + f[2] * focal];
+  const dyaw = Math.atan2(Math.sin(to.yaw - cam.yaw), Math.cos(to.yaw - cam.yaw)); // the short way round
+  snap = { y0: cam.yaw, p0: cam.pitch, y1: cam.yaw + dyaw, p1: to.pitch, t0: performance.now(), view, focal, target };
+  requestFrame();
+}
+
+function stepSnap(now: number): void {
+  if (!snap) return;
+  const k = Math.min(1, (now - snap.t0) / SNAP_MS);
+  const ease = 1 - (1 - k) ** 3;
+  cam.yaw = snap.y0 + (snap.y1 - snap.y0) * ease;
+  cam.pitch = snap.p0 + (snap.p1 - snap.p0) * ease;
+  if (k >= 1) {
+    cam.yaw = AXIS_VIEWS[snap.view].yaw; // the same orientation, without accumulated turns
+    cam.pitch = AXIS_VIEWS[snap.view].pitch;
+  }
+  const f = cam.forward();
+  cam.eye = [snap.target[0] - f[0] * snap.focal, snap.target[1] - f[1] * snap.focal, snap.target[2] - f[2] * snap.focal];
+  if (k >= 1) {
+    snap = null;
+    saveStateSoon();
+  } else requestFrame();
+}
+
+/** Tells the main thread about a changed camera; only from rendered frames, so idle posts nothing. */
+function postCamera(): void {
+  const key = `${cam.yaw}|${cam.pitch}|${cam.ortho}|${cam.eye.join(',')}`;
+  if (key === lastCamera) return;
+  lastCamera = key;
+  const pm = cam.proj();
+  post({ type: 'camera', yaw: cam.yaw, pitch: cam.pitch, ortho: cam.ortho, forward: cam.forward(), eye: [cam.eye[0], cam.eye[1], cam.eye[2]], projW: [pm[11], pm[15]] });
 }
 
 let statsTimer: ReturnType<typeof setTimeout> | null = null;
@@ -193,7 +250,7 @@ function frameView(reset: boolean): void {
 }
 
 function stateJson(): string {
-  return JSON.stringify({ camera: { eye: cam.eye, yaw: cam.yaw, pitch: cam.pitch }, brush, units });
+  return JSON.stringify({ camera: { eye: cam.eye, yaw: cam.yaw, pitch: cam.pitch, ortho: cam.ortho }, brush, units, view });
 }
 
 function saveStateSoon(): void {
@@ -314,22 +371,25 @@ function steadyMB(): number {
   return (core.mem().byteLength + (renderer?.gpuBytes ?? 0)) / 2 ** 20;
 }
 
-async function createSphere(n: number): Promise<boolean> {
-  const verts = 6 * n * n + 2;
-  const needMB = (verts * BYTES_PER_VERTEX) / 2 ** 20;
+/** A new project from a shape (PRM-1 sphere, PRM-2 primitives), after the PLT-8 pre-flight. */
+async function createShape(kind: ShapeKind, n: number): Promise<boolean> {
+  const c = shapeCounts(kind, n);
+  const what = SHAPES[kind].label.toLowerCase();
+  const needMB = (c.verts * BYTES_PER_VERTEX) / 2 ** 20;
   // PLT-8 pre-flight against the learned budget: the new mesh replaces the current one, whose
   // memory is reused, so only the growth beyond it is transient.
   const currentMeshMB = (meshVerts * BYTES_PER_VERTEX) / 2 ** 20;
-  const pre = fits(steadyMB(), Math.max(0, needMB - currentMeshMB), 'This sphere');
+  const pre = fits(steadyMB(), Math.max(0, needMB - currentMeshMB), `This ${what}`);
   if (!pre.ok) {
     post({
       type: 'refused',
-      text: `A ${(12 * n * n).toLocaleString('en-US')}-triangle sphere needs about ${fmtMB(needMB)}; with ${fmtMB(pre.steadyMB)} in use that is over this iPad's ${fmtMB(pre.budgetMB)} budget (${budgetSource(currentBudget())}).`,
+      text: `A ${c.tris.toLocaleString('en-US')}-triangle ${what} needs about ${fmtMB(needMB)}; with ${fmtMB(pre.steadyMB)} in use that is over this iPad's ${fmtMB(pre.budgetMB)} budget (${budgetSource(currentBudget())}).`,
     });
     return false;
   }
-  core.x.eng_new_sphere(n, LEAF);
-  await createProjectFromEngine(`Sphere ${12 * n * n}`, 'm');
+  if (kind === 'sphere') core.x.eng_new_sphere(n, LEAF);
+  else core.x.eng_new_primitive(PRIMITIVE_ID[kind], n, LEAF);
+  await createProjectFromEngine(`${SHAPES[kind].label} ${c.tris}`, 'm');
   return true;
 }
 
@@ -344,6 +404,7 @@ async function createProjectFromEngine(name: string, u: Units): Promise<void> {
   lastAcked = 0;
   journalBytes = 0;
   units = u;
+  useView(undefined);
   const tlen = core.x.eng_topo_bytes();
   const topo = core.out(tlen);
   const positions = new Uint8Array(core.mem(), core.x.eng_positions_ptr(), core.x.eng_positions_bytes()).slice().buffer;
@@ -486,17 +547,20 @@ function loadProject(r: OpenResult, unclean: boolean): RecoveryInfo {
   projectId = r.projectId!;
   // Restore view and tool state (PRJ-10) and the project's units (PRJ-9).
   units = 'm';
+  useView(undefined);
   let restoredCamera = false;
   if (r.state) {
     try {
-      const st = JSON.parse(r.state) as { camera?: { eye: V3; yaw: number; pitch: number }; brush?: BrushState; units?: Units };
+      const st = JSON.parse(r.state) as { camera?: { eye: V3; yaw: number; pitch: number; ortho?: boolean }; brush?: BrushState; units?: Units; view?: Partial<ViewState> };
       if (st.brush) brush = { ...brush, ...st.brush };
+      if (st.view) useView(st.view);
       if (st.units && UNITS.includes(st.units)) units = st.units;
       frameView(false);
       if (st.camera) {
         cam.eye = st.camera.eye;
         cam.yaw = st.camera.yaw;
         cam.pitch = st.camera.pitch;
+        cam.ortho = !!st.camera.ortho; // NAV-4
         restoredCamera = true;
       }
     } catch {}
@@ -537,10 +601,10 @@ async function init(m: Extract<ToEngine, { type: 'init' }>): Promise<void> {
       recovered = loadTracked(opened, unclean);
     } catch (e) {
       post({ type: 'status', text: `Couldn't open the last project (${e}); started a new sphere.`, level: 'error' });
-      await createSphere(DEFAULT_SPHERE);
+      await createShape('sphere', DEFAULT_SPHERE);
     }
   } else {
-    await createSphere(DEFAULT_SPHERE);
+    await createShape('sphere', DEFAULT_SPHERE);
     recovered.project = 'New sphere';
   }
   if (pendingSize) {
@@ -551,7 +615,7 @@ async function init(m: Extract<ToEngine, { type: 'init' }>): Promise<void> {
   renderer.uploadAll(core);
   requestFrame();
   if (recovered.records > 0 || recovered.stoppedAt) void checkpoint();
-  post({ type: 'ready', stats: stats(), recovered, brush, simd: core.simd });
+  post({ type: 'ready', stats: stats(), recovered, brush, simd: core.simd, view });
   postProject();
   post({ type: 'units', units });
   if (!storageOk) post({ type: 'storage', ok: false, error: 'storage unavailable' });
@@ -597,7 +661,7 @@ const mbs = (n: number) => `${Math.max(0, Math.round(n / 2 ** 20)).toLocaleStrin
 
 /** Tells the UI which project is open; call after anything that changes `projectId`. */
 function postProject(error?: string): void {
-  post({ type: 'project', id: projectId, name: projectName, brush, brushRestored, error });
+  post({ type: 'project', id: projectId, name: projectName, brush, brushRestored, error, view });
 }
 
 function loadTracked(r: OpenResult, unclean: boolean): RecoveryInfo {
@@ -666,14 +730,15 @@ async function openById(id: string): Promise<void> {
 }
 
 /** A new project is a growth-causing edit (PLT-11): refused up front when space is low. */
-async function newSphere(n: number): Promise<void> {
+async function newShape(kind: ShapeKind, n: number): Promise<void> {
   if (switching || strokeActive || editBlocked()) return;
   if (storageOk) {
     const est = await call({ type: 'estimate' });
     const v = est.ok ? (est.value as { usage?: number; quota?: number }) : null;
     if (v?.quota) {
       const free = v.quota - (v.usage ?? 0);
-      const need = 12 * (6 * n * n + 2) + 13 * 12 * n * n; // positions + triangles + polygon runs
+      const c = shapeCounts(kind, n);
+      const need = 12 * c.verts + 13 * c.tris; // positions + triangles + polygon runs
       if (free - need < LOW_SPACE_BYTES) {
         post({ type: 'refused', text: `Not enough storage for a new project: ${mbs(free)} free and Maquette keeps ${mbs(LOW_SPACE_BYTES)} in reserve. Back up, then purge Recently Deleted or delete projects.` });
         return;
@@ -684,7 +749,7 @@ async function newSphere(n: number): Promise<void> {
   try {
     await flushProject();
     loading = true;
-    if (await createSphere(n)) {
+    if (await createShape(kind, n)) {
       brushRestored = false;
       post({ type: 'stats', stats: stats() });
     }
@@ -738,11 +803,27 @@ scope.onmessage = async (e: MessageEvent<ToEngine>) => {
     if (m.type === 'resize') pendingSize = { width: m.width, height: m.height, dpr: m.dpr };
     return;
   }
+  // NAV-4: any other camera move ends an axis-view animation where it is.
+  if (snap && (m.type === 'gesture-begin' || m.type === 'orbit' || m.type === 'pan' || m.type === 'zoom' || m.type === 'frame-view' || m.type === 'reset-view')) snap = null;
   switch (m.type) {
+    case 'view-axis':
+      snapTo(m.view);
+      break;
+    case 'projection':
+      cam.ortho = m.ortho;
+      saveStateSoon();
+      requestFrame();
+      break;
     case 'resize':
       resize(m.width, m.height, m.dpr);
       setBrush(brush);
       requestFrame();
+      break;
+    case 'view':
+      useView(m.view, true);
+      saveStateSoon();
+      requestFrame();
+      postStats(true); // GPU bytes change with the wireframe buffers
       break;
     case 'brush':
       setBrush(m.brush);
@@ -823,7 +904,11 @@ scope.onmessage = async (e: MessageEvent<ToEngine>) => {
       break;
     case 'new-sphere':
       if (remeshRunning) break;
-      await newSphere(m.n);
+      await newShape('sphere', m.n);
+      break;
+    case 'new-primitive': // PRM-2
+      if (remeshRunning || !(m.kind in PRIMITIVE_ID)) break;
+      await newShape(m.kind, m.n);
       break;
     case 'open-project':
       await openById(m.id);

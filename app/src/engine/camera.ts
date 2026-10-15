@@ -1,5 +1,8 @@
 // Turntable camera with orbit around a surface pivot (NAV-1). State: eye position plus yaw and
 // pitch; world up is +Y. Matrices are column-major (WebGL convention, same as core/src/mat4.rs).
+// NAV-4: axis views (pitch may reach exactly +-90 degrees: the basis is built from yaw and pitch,
+// never from world-up, so top and bottom views are well defined) and an orthographic projection
+// whose scale follows the distance to the scene centre, so dolly-zoom still zooms.
 
 export type V3 = [number, number, number];
 export type M4 = Float32Array;
@@ -29,6 +32,30 @@ export function perspective(fovY: number, aspect: number, near: number, far: num
   const nf = 1 / (near - far);
   return new Float32Array([f / aspect, 0, 0, 0, 0, f, 0, 0, 0, 0, (far + near) * nf, -1, 0, 0, 2 * far * near * nf, 0]);
 }
+
+export function orthographic(halfW: number, halfH: number, near: number, far: number): M4 {
+  const nf = 1 / (near - far);
+  return new Float32Array([1 / halfW, 0, 0, 0, 0, 1 / halfH, 0, 0, 0, 0, 2 * nf, 0, 0, 0, (far + near) * nf, 1]);
+}
+
+/** View-space basis of a turntable orientation: right is always horizontal. */
+export function basis(yaw: number, pitch: number): { forward: V3; right: V3; up: V3 } {
+  const forward: V3 = [-Math.sin(yaw) * Math.cos(pitch), -Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)];
+  const right: V3 = [Math.cos(yaw), 0, -Math.sin(yaw)];
+  return { forward, right, up: cross(right, forward) };
+}
+
+/** NAV-4 axis views, named like Blender's. The camera sits on that side looking at the centre.
+ *  Blender's axes after a default OBJ import: X = our X, Y = our -Z, Z = our +Y (up). */
+export const AXIS_VIEWS = {
+  right: { yaw: Math.PI / 2, pitch: 0 }, // Blender +X ball
+  left: { yaw: -Math.PI / 2, pitch: 0 }, // -X
+  back: { yaw: Math.PI, pitch: 0 }, // +Y
+  front: { yaw: 0, pitch: 0 }, // -Y
+  top: { yaw: 0, pitch: Math.PI / 2 }, // +Z (Blender +Y points up on screen)
+  bottom: { yaw: 0, pitch: -Math.PI / 2 }, // -Z
+} as const;
+export type AxisView = keyof typeof AXIS_VIEWS;
 
 export function lookAt(eye: V3, target: V3, up: V3): M4 {
   const z = norm(sub(eye, target));
@@ -74,7 +101,7 @@ export function invert(m: M4): M4 {
 }
 
 const UP: V3 = [0, 1, 0];
-const PITCH_LIMIT = 1.45;
+const PITCH_LIMIT = Math.PI / 2;
 
 export class Camera {
   eye: V3 = [0, 0, 3];
@@ -86,40 +113,63 @@ export class Camera {
   /** Scene scale (bounding radius): sets near/far and pan speed. */
   radius = 1;
   center: V3 = [0, 0, 0];
+  /** NAV-4: orthographic projection. */
+  ortho = false;
 
   forward(): V3 {
-    return [-Math.sin(this.yaw) * Math.cos(this.pitch), -Math.sin(this.pitch), -Math.cos(this.yaw) * Math.cos(this.pitch)];
+    return basis(this.yaw, this.pitch).forward;
   }
 
   right(): V3 {
-    return norm(cross(this.forward(), UP));
+    return basis(this.yaw, this.pitch).right;
   }
 
   up(): V3 {
-    return cross(this.right(), this.forward());
+    return basis(this.yaw, this.pitch).up;
   }
 
   view(): M4 {
-    return lookAt(this.eye, add(this.eye, this.forward()), UP);
+    const { forward: f, right: x, up: y } = basis(this.yaw, this.pitch);
+    const z: V3 = [-f[0], -f[1], -f[2]];
+    const e = this.eye;
+    return new Float32Array([x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0, -dot(x, e), -dot(y, e), -dot(z, e), 1]);
+  }
+
+  /** Ortho half-height in world units: what the perspective view shows at the centre's depth. */
+  orthoHalfHeight(): number {
+    return this.depthOf(this.center) * Math.tan(this.fov / 2);
   }
 
   proj(): M4 {
+    const aspect = this.width / this.height;
+    if (this.ortho) {
+      // Everything within the scene's reach is in the box, including what lies behind the eye.
+      const d = this.depthOf(this.center);
+      const h = this.orthoHalfHeight();
+      return orthographic(h * aspect, h, d - this.radius * 4, d + this.radius * 4);
+    }
     const dist = Math.max(len(sub(this.eye, this.center)), this.radius * 0.01);
     const near = Math.max(dist - this.radius * 4, this.radius * 0.002);
     const far = dist + this.radius * 4;
-    return perspective(this.fov, this.width / this.height, near, far);
+    return perspective(this.fov, aspect, near, far);
   }
 
   viewProj(): M4 {
     return mul(this.proj(), this.view());
   }
 
-  /** World units per device pixel at unit depth. */
+  /** World units per device pixel at unit depth (perspective). */
   pxToWorld(): number {
     return (2 * Math.tan(this.fov / 2)) / this.height;
   }
 
-  /** The 26 floats the Rust engine expects (core/src/engine.rs `Camera`). */
+  /** World units per device pixel at point p: depth-scaled in perspective, constant in ortho. */
+  worldPerPx(p: V3): number {
+    return this.ortho ? (2 * this.orthoHalfHeight()) / this.height : this.depthOf(p) * this.pxToWorld();
+  }
+
+  /** The 26 floats the Rust engine expects (core/src/engine.rs `Camera`). [25] is the ortho
+   *  world size of a pixel (0 = perspective): dab radii then don't depend on depth. */
   pack(out: Float32Array): void {
     out.set(invert(this.viewProj()), 0);
     out.set(this.eye, 16);
@@ -127,7 +177,7 @@ export class Camera {
     out[22] = this.width;
     out[23] = this.height;
     out[24] = this.pxToWorld();
-    out[25] = 0;
+    out[25] = this.ortho ? (2 * this.orthoHalfHeight()) / this.height : 0;
   }
 
   /** Turntable orbit around `pivot`: yaw about world Y, pitch about the camera's right axis. */
@@ -143,7 +193,7 @@ export class Camera {
   }
 
   pan(dxPx: number, dyPx: number, depth: number): void {
-    const k = depth * this.pxToWorld();
+    const k = this.ortho ? (2 * this.orthoHalfHeight()) / this.height : depth * this.pxToWorld();
     this.eye = add(this.eye, add(scale(this.right(), -dxPx * k), scale(this.up(), dyPx * k)));
   }
 

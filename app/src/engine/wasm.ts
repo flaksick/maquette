@@ -29,6 +29,7 @@ export interface Exports {
   eng_gpu_page_sizes(p: number, out: number): void;
   eng_gpu_full_page(p: number): number;
   eng_gpu_arena_ptr(): number;
+  eng_gpu_edge_page(p: number): number;
   eng_gpu_cmds_ptr(): number;
   eng_positions_ptr(): number;
   eng_positions_bytes(): number;
@@ -75,6 +76,7 @@ export interface Exports {
   eng_import(ptr: number, len: number, hint: number, leafMax: number): number;
   eng_export_stl(scale: number, info: number): number;
   eng_mesh_check(out: number): number;
+  eng_new_primitive(kind: number, n: number, leafMax: number): number; // PRM-2, core/src/primitives.rs
 }
 
 export class Core {

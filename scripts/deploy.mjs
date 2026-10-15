@@ -6,6 +6,7 @@
 import { execSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { assembleProd } from './release.mjs';
 
 const channel = process.argv[2];
 const push = !process.argv.includes('--no-push');
@@ -51,14 +52,17 @@ if (channel === 'dev') {
   rmSync('deploy/dev/probe', { recursive: true, force: true });
   cpSync('dist/probe', 'deploy/dev/probe', { recursive: true });
 } else {
-  replaceDir('deploy', 'dist/app-prod', ['.git', 'dev', '.nojekyll']);
+  // PLT-3: a new immutable folder v/<id>/ (the newest 3 kept), the stable sw.js, boot index and
+  // versions.json at the root; /dev/ and /dev/probe/ are untouched.
+  const rel = assembleProd({ dist: 'dist/app-prod', root: 'deploy' });
+  console.log(`prod release: ${rel.describe}`);
 }
 writeFileSync('deploy/.nojekyll', '');
 cpSync('THIRD_PARTY_NOTICES.md', 'deploy/THIRD_PARTY_NOTICES.md');
 
 // Last fence before anything leaves the machine (invariant 11), then publish.
 run('gitleaks dir deploy --redact --no-banner -l warn');
-const version = JSON.parse(readFileSync(channel === 'dev' ? 'deploy/dev/precache.json' : 'deploy/precache.json', 'utf8')).version;
+const version = channel === 'dev' ? JSON.parse(readFileSync('deploy/dev/precache.json', 'utf8')).version : JSON.parse(readFileSync('deploy/versions.json', 'utf8')).current;
 run('git add -A', { cwd: 'deploy' });
 const dirty = out('git -C deploy status --porcelain') !== '';
 if (dirty) run(`git commit -q -m "${channel}: app ${version}"`, { cwd: 'deploy' });

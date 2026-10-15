@@ -1,3 +1,5 @@
+import type { AxisView } from '../engine/camera';
+
 // Messages between the three threads. The main thread never touches the mesh (invariant 1);
 // the engine worker is its only writer (invariant 2); the persist worker owns storage.
 import type { BenchResult, BudgetChange, BudgetState, StressResult } from '../budget';
@@ -57,10 +59,17 @@ export interface CameraState {
 }
 
 /** Main -> engine. */
+/** How the mesh is drawn (PNT-6), saved with the project's view state (PRJ-10). */
+export interface ViewState {
+  shading: 'smooth' | 'flat';
+  wireframe: boolean;
+}
+
 export type ToEngine =
   | { type: 'init'; canvas: OffscreenCanvas; dpr: number; width: number; height: number; persist: MessagePort; channel: string; budgetMB: number }
   | { type: 'resize'; width: number; height: number; dpr: number }
   | { type: 'brush'; brush: BrushState }
+  | { type: 'view'; view: ViewState }
   | { type: 'stroke-begin'; x: number; y: number; p: number }
   | { type: 'stroke-move'; samples: Float32Array }
   | { type: 'stroke-end' }
@@ -74,6 +83,7 @@ export type ToEngine =
   | { type: 'frame-view' }
   | { type: 'reset-view' }
   | { type: 'new-sphere'; n: number }
+  | { type: 'new-primitive'; kind: import('../primitives').PrimitiveKind; n: number } // PRM-2
   | { type: 'export-obj' }
   // [io] import / units / STL export (IMP-0/1/2, PRJ-9, EXP-2)
   | { type: 'import-mesh'; name: string; ext: string; bytes: ArrayBuffer }
@@ -85,6 +95,9 @@ export type ToEngine =
   | { type: 'query' }
   // P1b projects (PRJ-1): load another project by id; PLT-11: retry records the disk refused.
   | { type: 'open-project'; id: string }
+  // NAV-4: snap to a Blender axis view (animated); perspective or orthographic projection.
+  | { type: 'view-axis'; view: AxisView }
+  | { type: 'projection'; ortho: boolean }
   | { type: 'disk-retry' }
   // ---- PLT-8 device budgets ----
   | { type: 'budget'; budget: BudgetState }
@@ -132,7 +145,7 @@ export type RemeshEvent =
 
 /** Engine -> main. */
 export type FromEngine =
-  | { type: 'ready'; stats: Stats; recovered: RecoveryInfo; brush?: BrushState; simd: boolean }
+  | { type: 'ready'; stats: Stats; recovered: RecoveryInfo; brush?: BrushState; simd: boolean; view?: ViewState }
   | { type: 'stats'; stats: Stats }
   | { type: 'saved'; seq: number; latencyMs: number }
   | { type: 'status'; text: string; level: 'info' | 'warn' | 'error' }
@@ -148,7 +161,10 @@ export type FromEngine =
   | { type: 'query-result'; hash: string; stats: Stats; storageOk: boolean }
   // P1b: the open project (after launch, new, open; `error` = a switch failed and this one stayed
   // open). `brushRestored` = the brush came from the project's saved state (PRJ-10).
-  | { type: 'project'; id: string; name: string; brush: BrushState; brushRestored: boolean; error?: string }
+  | { type: 'project'; id: string; name: string; brush: BrushState; brushRestored: boolean; error?: string; view?: ViewState }
+  // NAV-4: posted from a rendered frame whenever the camera changed (the navigation orb follows
+  // it; idle stays free). projW = projection matrix [11], [15]: (-1, 0) perspective, (0, 1) ortho.
+  | { type: 'camera'; yaw: number; pitch: number; ortho: boolean; forward: [number, number, number]; eye: [number, number, number]; projW: [number, number] }
   // PLT-11: the disk refused journal records; edits are blocked until they are saved.
   | { type: 'disk'; full: boolean; unsaved: number }
   // ---- PLT-8 device budgets: the budget in force after session-start learning ----

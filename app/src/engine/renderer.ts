@@ -3,6 +3,7 @@
 // and one IBO. Uploads come straight out of WASM memory. Draws only when asked (invariant 10).
 import type { Core } from './wasm';
 import type { Camera, M4 } from './camera';
+import type { ViewState as View } from '../shared/protocol';
 
 const STRIDE = 20;
 const CMD_WORDS = 5;
@@ -14,7 +15,10 @@ interface PageGL {
   ibo: WebGLBuffer;
   indexCount: number;
   vbytes: number;
+  /** Wireframe overlay (PNT-6): polygon edges over the same VBO; only while the overlay is on. */
+  edges: { vao: WebGLVertexArrayObject; ibo: WebGLBuffer; count: number } | null;
 }
+
 
 const MESH_VS = `#version 300 es
 layout(location=0) in vec3 aPos;
@@ -35,11 +39,17 @@ const MESH_FS = `#version 300 es
 precision highp float;
 in vec3 vN;
 in vec3 vViewPos;
+uniform int uFlat;
+uniform float uOrtho;
 out vec4 o;
 void main() {
+  // Flat (PNT-6): the face normal from screen-space derivatives of the view-space position,
+  // so it needs no per-face data. It always faces the eye, as the flipped smooth normal does.
+  vec3 faceN = normalize(cross(dFdx(vViewPos), dFdy(vViewPos)));
   vec3 n = normalize(vN);
   if (!gl_FrontFacing) n = -n;
-  vec3 v = normalize(-vViewPos);
+  if (uFlat == 1) n = faceN;
+  vec3 v = uOrtho > 0.5 ? vec3(0.0, 0.0, 1.0) : normalize(-vViewPos); // NAV-4: parallel view rays in ortho
   vec3 l = normalize(vec3(-0.45, 0.55, 0.7));
   float diff = max(dot(n, l), 0.0);
   float wrap = max(dot(n, l) * 0.5 + 0.5, 0.0);
@@ -87,6 +97,9 @@ export class Renderer {
   private lineProg!: WebGLProgram;
   private uVP!: WebGLUniformLocation;
   private uView!: WebGLUniformLocation;
+  private uFlat!: WebGLUniformLocation;
+  view: View = { shading: 'smooth', wireframe: false };
+  private uOrtho!: WebGLUniformLocation;
   private lineVP!: WebGLUniformLocation;
   private lineColor!: WebGLUniformLocation;
   private ringVao!: WebGLVertexArrayObject;
@@ -113,6 +126,8 @@ export class Renderer {
     this.lineProg = program(this.gl, LINE_VS, LINE_FS);
     this.uVP = this.gl.getUniformLocation(this.meshProg, 'uVP')!;
     this.uView = this.gl.getUniformLocation(this.meshProg, 'uView')!;
+    this.uFlat = this.gl.getUniformLocation(this.meshProg, 'uFlat')!;
+    this.uOrtho = this.gl.getUniformLocation(this.meshProg, 'uOrtho')!;
     this.lineVP = this.gl.getUniformLocation(this.lineProg, 'uVP')!;
     this.lineColor = this.gl.getUniformLocation(this.lineProg, 'uColor')!;
     this.ringVao = this.gl.createVertexArray()!;
@@ -131,6 +146,7 @@ export class Renderer {
   /** Rebuilds every page from the engine (load, new mesh, context loss, blank canvas). */
   uploadAll(core: Core): void {
     const gl = this.gl;
+    this.freeEdges();
     for (const p of this.pages) {
       gl.deleteVertexArray(p.vao);
       gl.deleteBuffer(p.vbo);
@@ -168,8 +184,46 @@ export class Renderer {
       gl.enableVertexAttribArray(1);
       gl.vertexAttribPointer(1, 4, gl.SHORT, true, STRIDE, 12);
       gl.bindVertexArray(null);
-      this.pages.push({ vao, vbo, ibo, indexCount, vbytes });
+      this.pages.push({ vao, vbo, ibo, indexCount, vbytes, edges: null });
       this.gpuBytes += vbytes + indexCount * 4;
+    }
+    if (this.view.wireframe) this.buildEdges(core);
+  }
+
+  /** Applies a view; the wireframe's edge buffers exist only while it is on. */
+  setView(core: Core, view: View): void {
+    this.view = { ...view };
+    if (view.wireframe) this.buildEdges(core);
+    else this.freeEdges();
+  }
+
+  private buildEdges(core: Core): void {
+    const gl = this.gl;
+    for (let p = 0; p < this.pages.length; p++) {
+      const page = this.pages[p];
+      if (page.edges) continue;
+      const count = core.x.eng_gpu_edge_page(p);
+      const vao = gl.createVertexArray()!;
+      gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, page.vbo);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, STRIDE, 0);
+      const ibo = gl.createBuffer()!;
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint8Array(core.mem(), core.x.eng_gpu_arena_ptr(), count * 4), gl.STATIC_DRAW);
+      gl.bindVertexArray(null);
+      page.edges = { vao, ibo, count };
+      this.gpuBytes += count * 4;
+    }
+  }
+
+  private freeEdges(): void {
+    for (const page of this.pages) {
+      if (!page.edges) continue;
+      this.gl.deleteVertexArray(page.edges.vao);
+      this.gl.deleteBuffer(page.edges.ibo);
+      this.gpuBytes -= page.edges.count * 4;
+      page.edges = null;
     }
   }
 
@@ -222,9 +276,33 @@ export class Renderer {
     gl.useProgram(this.meshProg);
     gl.uniformMatrix4fv(this.uVP, false, vp);
     gl.uniformMatrix4fv(this.uView, false, view);
+    gl.uniform1f(this.uOrtho, cam.ortho ? 1 : 0);
+    gl.uniform1i(this.uFlat, this.view.shading === 'flat' ? 1 : 0);
+    const wire = this.view.wireframe;
+    if (wire) {
+      // Push the surface back a little so the edges on it win the depth test.
+      gl.enable(gl.POLYGON_OFFSET_FILL);
+      gl.polygonOffset(1, 1);
+    }
     for (const p of this.pages) {
       gl.bindVertexArray(p.vao);
       gl.drawElements(gl.TRIANGLES, p.indexCount, gl.UNSIGNED_INT, 0);
+    }
+    if (wire) {
+      gl.disable(gl.POLYGON_OFFSET_FILL);
+      gl.useProgram(this.lineProg);
+      gl.uniformMatrix4fv(this.lineVP, false, vp);
+      gl.uniform4f(this.lineColor, 0.12, 0.1, 0.09, 0.45);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.depthMask(false);
+      for (const p of this.pages) {
+        if (!p.edges) continue;
+        gl.bindVertexArray(p.edges.vao);
+        gl.drawElements(gl.LINES, p.edges.count, gl.UNSIGNED_INT, 0);
+      }
+      gl.depthMask(true);
+      gl.disable(gl.BLEND);
     }
     gl.bindVertexArray(null);
     if (ring) this.drawRing(vp, ring);

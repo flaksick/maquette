@@ -102,3 +102,15 @@ samples + frame update) stays <= 8 ms p95. Mac WebKit: 5 ms p95 at 2.0M tris -> 
 @ test-results/plt8-budgets.json; without cross-origin isolation Safari's timer has 1 ms steps, so
 p95 rounds up (conservative). The device run sets the real number.
 
+## 2026-10-15 · PLT-3: version folders, stable worker, boot-health revert
+Measured in WebKit @ test-results/plt3-updates.json (tests/updates.spec.ts). Installed tree = the
+deployed gh-pages prod (app 899e6c685409, old flat worker): the new worker installed and verified
+v/<id>/ in 210 ms during a normal session (no swap), the next launch ran the new version (208 ms)
+with 2/2 projects hash-identical, offline launch 206 ms. v1 -> v2: download + verify 93 ms, applied
+on the next cold launch (225 ms); a second window opened mid-session stayed on v1. Broken v3: two
+failed launches, the third ran v2 (227 ms), project intact, v3 never retried. A broken FIRST
+release over the installed app falls back to the installed version (216 ms, also offline).
+Decisions: the worker carries no version (Safari 27 drops registrations whose script is missing,
+and a stable file makes the worker's own update rare); boot-ok = engine ready with a project open;
+the old worker's cache is the fallback, so the first deploy of this layout can't brick an install.
+

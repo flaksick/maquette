@@ -59,7 +59,7 @@ Status is computed from tagged test results and device reports (`npm run verify`
 | ID | Feature | Tier | Phase | Done when | Test |
 |---|---|---|---|---|---|
 | PRM-1 | Quad sphere | D | P1a | All-quad cube-sphere; resolution slider shows polys; radius error < 0.5% | unit |
-| PRM-2 | Other primitives | D | P2 | Cube, cylinder, cone, torus, plane, capsule, icosphere; parametric until first sculpt; watertight (plane: boundary) | unit per primitive |
+| PRM-2 | Other primitives | D | P2 (shipped: the seven shapes with resolution; not built yet: parametric until first sculpt) | Cube, cylinder, cone, torus, plane, capsule, icosphere; parametric until first sculpt; watertight (plane: boundary) | unit per primitive |
 | PRM-3 | Tube / Lathe from a curve | R | P6 | Radius profile along a drawn curve; lathe revolve | unit + e2e |
 | PRM-4 | Extract shell from mask | R | P6 | Watertight; thickness slider | unit |
 
