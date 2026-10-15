@@ -1,5 +1,5 @@
 {
- "version": "4e18657b5563",
+ "version": "ed3863296324",
  "entry": "entry.html",
  "files": [
   {
@@ -8,34 +8,34 @@
    "sha256": "965eec3a3075b7c4430568fc1a75c9bf946776254088b2c998d3c163c17aad60"
   },
   {
-   "url": "assets/bench.worker-dvMN9fCv.js",
-   "bytes": 8063,
-   "sha256": "e053f85f42336a41e7ee2f35e83e453fd43ca5b7b3d056ad4208bc1efda6acf0"
+   "url": "assets/bench.worker-CYUfXcOC.js",
+   "bytes": 8643,
+   "sha256": "4a27298178f03e8e82c76c4a616e3b1b1288cd1b9bad67dfe9d0543cc60c2996"
   },
   {
-   "url": "assets/core.scalar-rDDy-2wr.wasm",
-   "bytes": 406059,
-   "sha256": "4f76541f4122322ab7d01bcda562af3583a22536e0799cae035dbd05a1f4ae28"
+   "url": "assets/core.scalar-Ct_LBP8f.wasm",
+   "bytes": 423759,
+   "sha256": "079a1b0c0c840fb308aa1b62c4159561337f73c62836bbe3a4ab8192d77e7927"
   },
   {
-   "url": "assets/core.simd-CLczGn3_.wasm",
-   "bytes": 408740,
-   "sha256": "64d3cc03a53daf72ac02d8063f865d8382b9acdafe3b996f28cd237a6cb74a9f"
+   "url": "assets/core.simd-B2MU8q9s.wasm",
+   "bytes": 426658,
+   "sha256": "4be8146d4e0c3a66c2d6044418ca8af54cb1c648c40e1058b26977a274595fc9"
   },
   {
-   "url": "assets/engine.worker-D2BJVczM.js",
-   "bytes": 31363,
-   "sha256": "ac4359a02578698c42eecd25597554fda13dba4f677e8ce30454c89bfed91022"
+   "url": "assets/engine.worker-D4eUHR-4.js",
+   "bytes": 35688,
+   "sha256": "0a61c51a95fe16e7acf5aa0186abbc2969af9e88e1cd1f91f8fabed6d68f863c"
   },
   {
-   "url": "assets/index-15ol6BsL.js",
-   "bytes": 80661,
-   "sha256": "6aca02f689efa4c17683ac54ff4a7749f9e97d98f95f15d91217ce5708e71de8"
+   "url": "assets/index-CgKIkvuL.js",
+   "bytes": 89057,
+   "sha256": "7f567e89f0786550ba6f12af7f7da1b27a8683d68a3cfdb7c077a549f24163f0"
   },
   {
-   "url": "assets/index-CmE-3-Ii.css",
-   "bytes": 6906,
-   "sha256": "a840aa2d84017c82f0b966e0431e44202f2448e5fa87ae943122062e4c5c4011"
+   "url": "assets/index-OBLqfQKc.css",
+   "bytes": 8094,
+   "sha256": "e1022e39d47912ed0fab7e08a961050349ddc5f47c20737384875ed9a52f758a"
   },
   {
    "url": "assets/persist.worker-BIIVJzrd.js",
@@ -50,7 +50,7 @@
   {
    "url": "entry.html",
    "bytes": 864,
-   "sha256": "60f4e5342768cf0250e58d9b4f3633aba32a3228c92c4f437548febf94787006"
+   "sha256": "92f6e973bf43f8b5a5c4ac8900edcd86a555bb9b0f23c9abc86e3a4fdcfee8b4"
   },
   {
    "url": "icons/app-180.png",
@@ -70,7 +70,7 @@
   {
    "url": "index.html",
    "bytes": 834,
-   "sha256": "e2c920f752c6ecff96f89666921aa2da8209a864c09b474ffe638f9b11c8957c"
+   "sha256": "387226a856598c5ee68afd3e1e2bce844edccb5e16c502b905ddcc553f3eeb8e"
   },
   {
    "url": "manifest.webmanifest",
