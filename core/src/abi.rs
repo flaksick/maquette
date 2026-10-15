@@ -287,7 +287,8 @@ pub extern "C" fn eng_set_brush(tool: u32, radius_px: f32, strength: f32, flags:
 
 /// The rest of the brush (STK-4, STK-11), kept until changed. falloff: 0 smooth, 1 smoother,
 /// 2 sphere, 3 root, 4 sharp, 5 linear, 6 pow4, 7 inverse square, 8 constant. hardness and
-/// autosmooth 0..1. Flags: 1 accumulate (sample the current surface, not the stroke-start one).
+/// autosmooth 0..1. Flags: 1 accumulate (sample the current surface, not the stroke-start one),
+/// 2 invert.
 #[unsafe(no_mangle)]
 pub extern "C" fn eng_set_brush_ext(falloff: u32, hardness: f32, autosmooth: f32, flags: u32) {
     with_engine(|e| {
@@ -295,6 +296,26 @@ pub extern "C" fn eng_set_brush_ext(falloff: u32, hardness: f32, autosmooth: f32
         e.brush.hardness = if hardness.is_finite() { hardness.clamp(0.0, 1.0) } else { 0.0 };
         e.brush.autosmooth = if autosmooth.is_finite() { autosmooth.clamp(0.0, 1.0) } else { 0.0 };
         e.brush.accumulate = flags & 1 != 0;
+        e.brush.invert = flags & 2 != 0;
+    });
+}
+
+/// Stabilizer (STK-3): lazy radius in device pixels, input smoothing 0..0.95.
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_set_stroke(lazy_px: f32, smoothing: f32) {
+    with_engine(|e| {
+        e.brush.lazy_px = if lazy_px.is_finite() { lazy_px.clamp(0.0, 500.0) } else { 0.0 };
+        e.brush.stabilize = if smoothing.is_finite() { smoothing.clamp(0.0, 0.95) } else { 0.0 };
+    });
+}
+
+/// Hold buttons (NAV-5), read at the next stroke start. Flags: 1 smooth, 2 invert.
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_set_modifiers(flags: u32, smooth_strength: f32) {
+    with_engine(|e| {
+        e.modifiers.smooth = flags & 1 != 0;
+        e.modifiers.invert = flags & 2 != 0;
+        e.modifiers.smooth_strength = if smooth_strength.is_finite() { smooth_strength.clamp(0.0, 1.0) } else { 0.5 };
     });
 }
 

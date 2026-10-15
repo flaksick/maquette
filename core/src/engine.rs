@@ -14,7 +14,7 @@ use crate::history::{encode_record, History, LeafStates, Transaction, UndoEntry,
 use crate::math::{dot, normalize, sub};
 use crate::mesh::{EditMesh, Hit};
 
-pub use crate::brushes::{Brush, Falloff, Tool, DRAW_K, SMOOTH_LAMBDA, TAUBIN_MU};
+pub use crate::brushes::{Brush, Falloff, Modifiers, Tool, DRAW_K, SMOOTH_LAMBDA, TAUBIN_MU};
 
 #[cfg(test)]
 use crate::brushes::mirror;
@@ -105,13 +105,57 @@ impl StampSet {
     }
 }
 
+/// Stroke stabilizer (STK-3): the samples are first averaged (exponential moving average,
+/// weight `keep` on the past), then a lazy point trails them: it stays put while the pencil is
+/// within `lazy` pixels and is pulled along the line to it beyond that, so wobble smaller than the
+/// radius never reaches the surface. On lift the stroke catches up to where the pencil left.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Stabilizer {
+    lazy: f32,
+    keep: f32,
+    ema: [f32; 2],
+    pt: [f32; 2],
+}
+
+impl Stabilizer {
+    pub fn new(lazy_px: f32, smoothing: f32, x: f32, y: f32) -> Stabilizer {
+        Stabilizer { lazy: lazy_px.max(0.0), keep: smoothing.clamp(0.0, 0.95), ema: [x, y], pt: [x, y] }
+    }
+
+    pub fn active(&self) -> bool {
+        self.lazy > 0.0 || self.keep > 0.0
+    }
+
+    /// The stroke point after one raw sample (unchanged samples pass through exactly when off).
+    pub fn feed(&mut self, x: f32, y: f32) -> [f32; 2] {
+        if !self.active() {
+            self.pt = [x, y];
+            return self.pt;
+        }
+        let k = self.keep;
+        self.ema = [self.ema[0] * k + x * (1.0 - k), self.ema[1] * k + y * (1.0 - k)];
+        let d = [self.ema[0] - self.pt[0], self.ema[1] - self.pt[1]];
+        let l = (d[0] * d[0] + d[1] * d[1]).sqrt();
+        if l > self.lazy {
+            let f = (l - self.lazy) / l;
+            self.pt = [self.pt[0] + d[0] * f, self.pt[1] + d[1] * f];
+        }
+        self.pt
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct StrokeState {
     pub active: bool,
     /// The tool is fixed for the whole stroke: a brush message mid-stroke can't switch a drag
-    /// into dabs halfway.
+    /// into dabs halfway. So are invert and strength (a held button may change them, NAV-5).
     pub tool: Option<Tool>,
+    pub invert: bool,
+    pub strength: f32,
     last: [f32; 3],
+    /// Last raw pencil sample: where the stroke catches up to on lift (STK-3).
+    raw: [f32; 3],
+    stab: Stabilizer,
     travel: f32,
     p_smooth: f32,
     pub dabs: u32,
@@ -130,6 +174,8 @@ pub struct Engine {
     pub ckpt_ranges: Vec<u32>,
     pub ckpt_seq: u32,
     pub last_dab: [f32; 7],
+    /// Hold buttons (NAV-5), read at stroke start.
+    pub modifiers: Modifiers,
     pub(crate) modified: StampSet,
     normal_set: StampSet,
     gpu_leaves: StampSet,
@@ -174,6 +220,7 @@ impl Engine {
             ckpt_ranges: Vec::new(),
             ckpt_seq: 0,
             last_dab: [0.0; 7],
+            modifiers: Modifiers::default(),
             modified: StampSet::new(nv),
             normal_set: StampSet::new(nv),
             gpu_leaves: StampSet::new(nl),
@@ -213,7 +260,7 @@ impl Engine {
     }
 
     pub(crate) fn dab_strength(&self, p: f32) -> f32 {
-        self.brush.strength * if self.brush.pressure_strength { self.pressure(p) } else { 1.0 }
+        self.stroke.strength * if self.brush.pressure_strength { self.pressure(p) } else { 1.0 }
     }
 
     pub fn raycast_screen(&self, x: f32, y: f32) -> Option<Hit> {
@@ -266,8 +313,22 @@ impl Engine {
         self.refit_pending();
         self.tx.begin();
         self.orig_n.begin(self.mesh.nleaves());
-        let tool = self.brush.tool;
-        self.stroke = StrokeState { active: true, tool: Some(tool), last: [x, y, p], travel: 0.0, p_smooth: p, dabs: 0, brush: BrushStroke::default() };
+        // A held Smooth button turns this stroke into a Smooth stroke; a held Invert flips it.
+        let m = self.modifiers;
+        let tool = if m.smooth { Tool::Smooth } else { self.brush.tool };
+        self.stroke = StrokeState {
+            active: true,
+            tool: Some(tool),
+            invert: self.brush.invert != m.invert,
+            strength: if m.smooth { m.smooth_strength.clamp(0.0, 1.0) } else { self.brush.strength },
+            last: [x, y, p],
+            raw: [x, y, p],
+            stab: Stabilizer::new(self.brush.lazy_px, self.brush.stabilize, x, y),
+            travel: 0.0,
+            p_smooth: p,
+            dabs: 0,
+            brush: BrushStroke::default(),
+        };
         match tool {
             Tool::Grab => {
                 let Some(hit) = self.raycast_screen(x, y) else { return false };
@@ -297,28 +358,35 @@ impl Engine {
                 self.stroke.last = [x, y, p];
                 continue;
             }
-            let [lx, ly, lp] = self.stroke.last;
-            let seg = ((x - lx).powi(2) + (y - ly).powi(2)).sqrt();
-            if seg <= 0.0 {
-                continue;
-            }
-            let mut t = 0.0f32;
-            loop {
-                let pp = lp + (p - lp) * (t / seg).min(1.0);
-                let spacing = (self.brush.spacing * self.radius_px_at(pp)).max(1.0);
-                let need = spacing - self.stroke.travel;
-                if t + need > seg {
-                    self.stroke.travel += seg - t;
-                    break;
-                }
-                t += need;
-                self.stroke.travel = 0.0;
-                let f = t / seg;
-                self.dab_at(lx + (x - lx) * f, ly + (y - ly) * f, lp + (p - lp) * f);
-            }
-            self.stroke.last = [x, y, p];
+            self.stroke.raw = [x, y, p];
+            let [fx, fy] = self.stroke.stab.feed(x, y);
+            self.advance(fx, fy, p);
         }
         self.stroke.dabs - before
+    }
+
+    /// Moves the stroke point to (x, y), placing dabs every `spacing` pixels on the way (STK-1).
+    fn advance(&mut self, x: f32, y: f32, p: f32) {
+        let [lx, ly, lp] = self.stroke.last;
+        let seg = ((x - lx).powi(2) + (y - ly).powi(2)).sqrt();
+        if seg <= 0.0 {
+            return;
+        }
+        let mut t = 0.0f32;
+        loop {
+            let pp = lp + (p - lp) * (t / seg).min(1.0);
+            let spacing = (self.brush.spacing * self.radius_px_at(pp)).max(1.0);
+            let need = spacing - self.stroke.travel;
+            if t + need > seg {
+                self.stroke.travel += seg - t;
+                break;
+            }
+            t += need;
+            self.stroke.travel = 0.0;
+            let f = t / seg;
+            self.dab_at(lx + (x - lx) * f, ly + (y - ly) * f, lp + (p - lp) * f);
+        }
+        self.stroke.last = [x, y, p];
     }
 
     /// Ends the stroke: pushes the undo entry and writes the journal record into `out`.
@@ -326,6 +394,11 @@ impl Engine {
     pub fn stroke_end(&mut self) -> usize {
         if !self.stroke.active {
             return 0;
+        }
+        // The stabilized stroke catches up to where the pencil lifted (STK-3).
+        if self.stroke.stab.active() && self.stroke_tool() != Tool::Grab {
+            let [x, y, p] = self.stroke.raw;
+            self.advance(x, y, p);
         }
         self.stroke.active = false;
         self.stroke.tool = None;
