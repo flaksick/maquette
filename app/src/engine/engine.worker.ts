@@ -26,6 +26,7 @@ import {
 } from '../shared/protocol';
 import { LOW_SPACE_BYTES } from '../shared/library';
 import { budgetMB, budgetSource, currentBudget, fits, fmtMB, setBudget } from '../budget';
+import { PRIMITIVE_ID, SHAPES, shapeCounts, type ShapeKind } from '../primitives';
 
 const DEFAULT_SPHERE = 96; // 110,592 triangles
 const LEAF = 1024;
@@ -314,22 +315,25 @@ function steadyMB(): number {
   return (core.mem().byteLength + (renderer?.gpuBytes ?? 0)) / 2 ** 20;
 }
 
-async function createSphere(n: number): Promise<boolean> {
-  const verts = 6 * n * n + 2;
-  const needMB = (verts * BYTES_PER_VERTEX) / 2 ** 20;
+/** A new project from a shape (PRM-1 sphere, PRM-2 primitives), after the PLT-8 pre-flight. */
+async function createShape(kind: ShapeKind, n: number): Promise<boolean> {
+  const c = shapeCounts(kind, n);
+  const what = SHAPES[kind].label.toLowerCase();
+  const needMB = (c.verts * BYTES_PER_VERTEX) / 2 ** 20;
   // PLT-8 pre-flight against the learned budget: the new mesh replaces the current one, whose
   // memory is reused, so only the growth beyond it is transient.
   const currentMeshMB = (meshVerts * BYTES_PER_VERTEX) / 2 ** 20;
-  const pre = fits(steadyMB(), Math.max(0, needMB - currentMeshMB), 'This sphere');
+  const pre = fits(steadyMB(), Math.max(0, needMB - currentMeshMB), `This ${what}`);
   if (!pre.ok) {
     post({
       type: 'refused',
-      text: `A ${(12 * n * n).toLocaleString('en-US')}-triangle sphere needs about ${fmtMB(needMB)}; with ${fmtMB(pre.steadyMB)} in use that is over this iPad's ${fmtMB(pre.budgetMB)} budget (${budgetSource(currentBudget())}).`,
+      text: `A ${c.tris.toLocaleString('en-US')}-triangle ${what} needs about ${fmtMB(needMB)}; with ${fmtMB(pre.steadyMB)} in use that is over this iPad's ${fmtMB(pre.budgetMB)} budget (${budgetSource(currentBudget())}).`,
     });
     return false;
   }
-  core.x.eng_new_sphere(n, LEAF);
-  await createProjectFromEngine(`Sphere ${12 * n * n}`, 'm');
+  if (kind === 'sphere') core.x.eng_new_sphere(n, LEAF);
+  else core.x.eng_new_primitive(PRIMITIVE_ID[kind], n, LEAF);
+  await createProjectFromEngine(`${SHAPES[kind].label} ${c.tris}`, 'm');
   return true;
 }
 
@@ -667,14 +671,15 @@ async function openById(id: string): Promise<void> {
 }
 
 /** A new project is a growth-causing edit (PLT-11): refused up front when space is low. */
-async function newSphere(n: number): Promise<void> {
+async function newShape(kind: ShapeKind, n: number): Promise<void> {
   if (switching || strokeActive || editBlocked()) return;
   if (storageOk) {
     const est = await call({ type: 'estimate' });
     const v = est.ok ? (est.value as { usage?: number; quota?: number }) : null;
     if (v?.quota) {
       const free = v.quota - (v.usage ?? 0);
-      const need = 12 * (6 * n * n + 2) + 13 * 12 * n * n; // positions + triangles + polygon runs
+      const c = shapeCounts(kind, n);
+      const need = 12 * c.verts + 13 * c.tris; // positions + triangles + polygon runs
       if (free - need < LOW_SPACE_BYTES) {
         post({ type: 'refused', text: `Not enough storage for a new project: ${mbs(free)} free and Maquette keeps ${mbs(LOW_SPACE_BYTES)} in reserve. Back up, then purge Recently Deleted or delete projects.` });
         return;
@@ -685,7 +690,7 @@ async function newSphere(n: number): Promise<void> {
   try {
     await flushProject();
     loading = true;
-    if (await createSphere(n)) {
+    if (await createShape(kind, n)) {
       brushRestored = false;
       post({ type: 'stats', stats: stats() });
     }
@@ -828,7 +833,11 @@ scope.onmessage = async (e: MessageEvent<ToEngine>) => {
       break;
     case 'new-sphere':
       if (remeshRunning) break;
-      await newSphere(m.n);
+      await newShape('sphere', m.n);
+      break;
+    case 'new-primitive': // PRM-2
+      if (remeshRunning || !(m.kind in PRIMITIVE_ID)) break;
+      await newShape(m.kind, m.n);
       break;
     case 'open-project':
       await openById(m.id);
