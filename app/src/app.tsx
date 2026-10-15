@@ -10,6 +10,7 @@ import { BUDGET, CHANNEL } from './config';
 import { Sheet } from './sheet';
 import { ProjectsSheet } from './gallery';
 import { DiskBanner, GestureCard, StorageSettings } from './safety';
+import { NavGizmo } from './navgizmo';
 import { ExportFormat, ImportButton, ImportSheet, requestExport } from './io-ui'; // [io]
 import { budget, benchRun, stressRun, runBench, startStressTest, markKillTest, deviceFeatures } from './budget-client';
 import { budgetSource, ceilingSource, fmtMB, fmtTris, shortSource, APP_BYTES_PER_TRI } from './budget';
@@ -554,6 +555,7 @@ export function App() {
         <ViewButtons />
         <Notice />
         <GestureCard />
+        <NavGizmo />
         <RemeshProgress />
         {!ui.ready.value && <div class="loading">Loading your sculpt…</div>}
       </main>

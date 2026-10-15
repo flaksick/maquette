@@ -3,7 +3,7 @@
 // before reporting it saved, and checkpoints when idle. It renders only when something changed.
 import { Core } from './wasm';
 import { Renderer } from './renderer';
-import { Camera, type V3 } from './camera';
+import { AXIS_VIEWS, Camera, type AxisView, type V3 } from './camera';
 import {
   FALLOFFS,
   TOOL_ID,
@@ -110,7 +110,7 @@ function ring(): { center: number[]; normal: number[]; radius: number } | null {
     if (core.x.eng_raycast(cam.width / 2, cam.height / 2)) {
       const h = core.f32s(core.x.eng_hit_ptr(), 6);
       const p: V3 = [h[0], h[1], h[2]];
-      return { center: [...p], normal: [h[3], h[4], h[5]], radius: brush.radiusPx * dpr * cam.depthOf(p) * cam.pxToWorld() };
+      return { center: [...p], normal: [h[3], h[4], h[5]], radius: brush.radiusPx * dpr * cam.worldPerPx(p) };
     }
   }
   return null;
@@ -118,6 +118,7 @@ function ring(): { center: number[]; normal: number[]; radius: number } | null {
 
 function frame(): void {
   frameRequested = false;
+  stepSnap(performance.now()); // NAV-4
   if (renderer.lost) {
     renderer.init();
     renderer.uploadAll(core);
@@ -128,6 +129,51 @@ function frame(): void {
   const mb = (core.mem().byteLength + renderer.gpuBytes) / 2 ** 20;
   highWaterMB = Math.max(highWaterMB, mb);
   postStats(false);
+  postCamera(); // NAV-4
+}
+
+// ---------- NAV-4: axis views, projection, and the camera the orb follows ----------
+const SNAP_MS = 180;
+let snap: { y0: number; p0: number; y1: number; p1: number; t0: number; view: AxisView; focal: number; target: V3 } | null = null;
+let lastCamera = '';
+
+/** Turns the camera to an axis view around what is at the centre of the screen (at the scene
+ *  centre's depth), keeping its distance; animated over SNAP_MS, exact at the end. */
+function snapTo(view: AxisView): void {
+  const to = AXIS_VIEWS[view];
+  const focal = cam.depthOf(cam.center);
+  const f = cam.forward();
+  const target: V3 = [cam.eye[0] + f[0] * focal, cam.eye[1] + f[1] * focal, cam.eye[2] + f[2] * focal];
+  const dyaw = Math.atan2(Math.sin(to.yaw - cam.yaw), Math.cos(to.yaw - cam.yaw)); // the short way round
+  snap = { y0: cam.yaw, p0: cam.pitch, y1: cam.yaw + dyaw, p1: to.pitch, t0: performance.now(), view, focal, target };
+  requestFrame();
+}
+
+function stepSnap(now: number): void {
+  if (!snap) return;
+  const k = Math.min(1, (now - snap.t0) / SNAP_MS);
+  const ease = 1 - (1 - k) ** 3;
+  cam.yaw = snap.y0 + (snap.y1 - snap.y0) * ease;
+  cam.pitch = snap.p0 + (snap.p1 - snap.p0) * ease;
+  if (k >= 1) {
+    cam.yaw = AXIS_VIEWS[snap.view].yaw; // the same orientation, without accumulated turns
+    cam.pitch = AXIS_VIEWS[snap.view].pitch;
+  }
+  const f = cam.forward();
+  cam.eye = [snap.target[0] - f[0] * snap.focal, snap.target[1] - f[1] * snap.focal, snap.target[2] - f[2] * snap.focal];
+  if (k >= 1) {
+    snap = null;
+    saveStateSoon();
+  } else requestFrame();
+}
+
+/** Tells the main thread about a changed camera; only from rendered frames, so idle posts nothing. */
+function postCamera(): void {
+  const key = `${cam.yaw}|${cam.pitch}|${cam.ortho}|${cam.eye.join(',')}`;
+  if (key === lastCamera) return;
+  lastCamera = key;
+  const pm = cam.proj();
+  post({ type: 'camera', yaw: cam.yaw, pitch: cam.pitch, ortho: cam.ortho, forward: cam.forward(), eye: [cam.eye[0], cam.eye[1], cam.eye[2]], projW: [pm[11], pm[15]] });
 }
 
 let statsTimer: ReturnType<typeof setTimeout> | null = null;
@@ -203,7 +249,7 @@ function frameView(reset: boolean): void {
 }
 
 function stateJson(): string {
-  return JSON.stringify({ camera: { eye: cam.eye, yaw: cam.yaw, pitch: cam.pitch }, brush, units, view });
+  return JSON.stringify({ camera: { eye: cam.eye, yaw: cam.yaw, pitch: cam.pitch, ortho: cam.ortho }, brush, units, view });
 }
 
 function saveStateSoon(): void {
@@ -490,7 +536,7 @@ function loadProject(r: OpenResult, unclean: boolean): RecoveryInfo {
   let restoredCamera = false;
   if (r.state) {
     try {
-      const st = JSON.parse(r.state) as { camera?: { eye: V3; yaw: number; pitch: number }; brush?: BrushState; units?: Units; view?: Partial<ViewState> };
+      const st = JSON.parse(r.state) as { camera?: { eye: V3; yaw: number; pitch: number; ortho?: boolean }; brush?: BrushState; units?: Units; view?: Partial<ViewState> };
       if (st.brush) brush = { ...brush, ...st.brush };
       if (st.view) useView(st.view);
       if (st.units && UNITS.includes(st.units)) units = st.units;
@@ -499,6 +545,7 @@ function loadProject(r: OpenResult, unclean: boolean): RecoveryInfo {
         cam.eye = st.camera.eye;
         cam.yaw = st.camera.yaw;
         cam.pitch = st.camera.pitch;
+        cam.ortho = !!st.camera.ortho; // NAV-4
         restoredCamera = true;
       }
     } catch {}
@@ -739,7 +786,17 @@ scope.onmessage = async (e: MessageEvent<ToEngine>) => {
     if (m.type === 'resize') pendingSize = { width: m.width, height: m.height, dpr: m.dpr };
     return;
   }
+  // NAV-4: any other camera move ends an axis-view animation where it is.
+  if (snap && (m.type === 'gesture-begin' || m.type === 'orbit' || m.type === 'pan' || m.type === 'zoom' || m.type === 'frame-view' || m.type === 'reset-view')) snap = null;
   switch (m.type) {
+    case 'view-axis':
+      snapTo(m.view);
+      break;
+    case 'projection':
+      cam.ortho = m.ortho;
+      saveStateSoon();
+      requestFrame();
+      break;
     case 'resize':
       resize(m.width, m.height, m.dpr);
       setBrush(brush);
