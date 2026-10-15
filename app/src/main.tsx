@@ -92,10 +92,12 @@ function onEngine(m: FromEngine): void {
   ioMessage(m); // [io] import report, units, STL export details
   switch (m.type) {
     case 'project':
+      if (m.view) ui.view.value = m.view;
       if (m.error) ui.notice.value = { level: 'warn', text: m.error };
       void onProjectOpened(m);
       break;
     case 'ready':
+      if (m.view) ui.view.value = m.view;
       ui.ready.value = true;
       onResize(); // the layout may have changed while the engine was starting
       ui.stats.value = m.stats;

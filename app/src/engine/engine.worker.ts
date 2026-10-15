@@ -22,6 +22,7 @@ import {
   UNITS,
   UNIT_TO_MM,
   type SessionStartResult,
+  type ViewState,
 } from '../shared/protocol';
 import { LOW_SPACE_BYTES } from '../shared/library';
 import { budgetMB, budgetSource, currentBudget, fits, fmtMB, setBudget } from '../budget';
@@ -60,6 +61,15 @@ let highWaterMB = 0;
 let lastStatsPost = 0;
 let stateTimer: ReturnType<typeof setTimeout> | null = null;
 let units: Units = 'm'; // PRJ-9: what one unit means; saved with the view state, default metres
+/** Shading and wireframe (PNT-6): part of the project's view state, default smooth, no wire. */
+let view: ViewState = { shading: 'smooth', wireframe: false };
+/** Sets the view from saved or requested state. The renderer builds wireframe buffers in the
+ *  next uploadAll, or now when `apply` (a toggle on the current mesh). */
+function useView(v: Partial<ViewState> | undefined, apply = false): void {
+  view = { shading: v?.shading === 'flat' ? 'flat' : 'smooth', wireframe: v?.wireframe === true };
+  if (apply) renderer.setView(core, view);
+  else renderer.view = { ...view };
+}
 
 const post = (m: FromEngine, t: Transferable[] = []) => scope.postMessage(m, t);
 
@@ -193,7 +203,7 @@ function frameView(reset: boolean): void {
 }
 
 function stateJson(): string {
-  return JSON.stringify({ camera: { eye: cam.eye, yaw: cam.yaw, pitch: cam.pitch }, brush, units });
+  return JSON.stringify({ camera: { eye: cam.eye, yaw: cam.yaw, pitch: cam.pitch }, brush, units, view });
 }
 
 function saveStateSoon(): void {
@@ -334,6 +344,7 @@ async function createProjectFromEngine(name: string, u: Units): Promise<void> {
   lastAcked = 0;
   journalBytes = 0;
   units = u;
+  useView(undefined);
   const tlen = core.x.eng_topo_bytes();
   const topo = core.out(tlen);
   const positions = new Uint8Array(core.mem(), core.x.eng_positions_ptr(), core.x.eng_positions_bytes()).slice().buffer;
@@ -475,11 +486,13 @@ function loadProject(r: OpenResult, unclean: boolean): RecoveryInfo {
   projectId = r.projectId!;
   // Restore view and tool state (PRJ-10) and the project's units (PRJ-9).
   units = 'm';
+  useView(undefined);
   let restoredCamera = false;
   if (r.state) {
     try {
-      const st = JSON.parse(r.state) as { camera?: { eye: V3; yaw: number; pitch: number }; brush?: BrushState; units?: Units };
+      const st = JSON.parse(r.state) as { camera?: { eye: V3; yaw: number; pitch: number }; brush?: BrushState; units?: Units; view?: Partial<ViewState> };
       if (st.brush) brush = { ...brush, ...st.brush };
+      if (st.view) useView(st.view);
       if (st.units && UNITS.includes(st.units)) units = st.units;
       frameView(false);
       if (st.camera) {
@@ -539,7 +552,7 @@ async function init(m: Extract<ToEngine, { type: 'init' }>): Promise<void> {
   renderer.uploadAll(core);
   requestFrame();
   if (recovered.records > 0 || recovered.stoppedAt) void checkpoint();
-  post({ type: 'ready', stats: stats(), recovered, brush, simd: core.simd });
+  post({ type: 'ready', stats: stats(), recovered, brush, simd: core.simd, view });
   postProject();
   post({ type: 'units', units });
   if (!storageOk) post({ type: 'storage', ok: false, error: 'storage unavailable' });
@@ -585,7 +598,7 @@ const mbs = (n: number) => `${Math.max(0, Math.round(n / 2 ** 20)).toLocaleStrin
 
 /** Tells the UI which project is open; call after anything that changes `projectId`. */
 function postProject(error?: string): void {
-  post({ type: 'project', id: projectId, name: projectName, brush, brushRestored, error });
+  post({ type: 'project', id: projectId, name: projectName, brush, brushRestored, error, view });
 }
 
 function loadTracked(r: OpenResult, unclean: boolean): RecoveryInfo {
@@ -731,6 +744,12 @@ scope.onmessage = async (e: MessageEvent<ToEngine>) => {
       resize(m.width, m.height, m.dpr);
       setBrush(brush);
       requestFrame();
+      break;
+    case 'view':
+      useView(m.view, true);
+      saveStateSoon();
+      requestFrame();
+      postStats(true); // GPU bytes change with the wireframe buffers
       break;
     case 'brush':
       setBrush(m.brush);

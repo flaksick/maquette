@@ -216,8 +216,20 @@ function Hud() {
 }
 
 function ViewButtons() {
+  const v = ui.view.value;
   return (
     <div class="viewbtns">
+      {/* Shade Smooth | Shade Flat, and the wireframe overlay (PNT-6). */}
+      <div class="seg" role="group" aria-label="Shading">
+        {(['smooth', 'flat'] as const).map((sh) => (
+          <button key={sh} data-feature="PNT-6" class={v.shading === sh ? 'on' : ''} aria-pressed={v.shading === sh} aria-label={sh === 'smooth' ? 'Shade Smooth' : 'Shade Flat'} onClick={() => ui.setView({ shading: sh })}>
+            {sh === 'smooth' ? 'Smooth' : 'Flat'}
+          </button>
+        ))}
+      </div>
+      <button data-feature="PNT-6" class={v.wireframe ? 'on' : ''} aria-pressed={v.wireframe} aria-label="Wireframe" onClick={() => ui.setView({ wireframe: !v.wireframe })}>
+        Wire
+      </button>
       <button data-feature="NAV-4" onClick={() => bus.send({ type: 'frame-view' })}>Frame</button>
       <button data-feature="NAV-4" onClick={() => bus.send({ type: 'reset-view' })}>Reset view</button>
     </div>

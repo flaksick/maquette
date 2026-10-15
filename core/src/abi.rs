@@ -390,6 +390,16 @@ pub extern "C" fn eng_gpu_full_page(p: u32) -> u32 {
     .unwrap_or(0)
 }
 
+/// Polygon edges of page p for the wireframe overlay (PNT-6) into the arena; returns the index count.
+#[unsafe(no_mangle)]
+pub extern "C" fn eng_gpu_edge_page(p: u32) -> u32 {
+    with_engine(|e| {
+        let mesh = &e.mesh;
+        if (p as usize) < e.gpu.pages.len() { e.gpu.edge_page(mesh, p as usize) as u32 } else { 0 }
+    })
+    .unwrap_or(0)
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn eng_gpu_arena_ptr() -> *const u8 {
     with_engine(|e| e.gpu.arena.as_ptr()).unwrap_or(std::ptr::null())

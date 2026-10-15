@@ -332,7 +332,7 @@ fn poly_run(mesh: &EditMesh, t: usize) -> (usize, usize) {
 
 /// Corner j of the fan polygon starting at triangle s (corners: v0, then each triangle's v1/v2).
 #[inline(always)]
-fn poly_corner(mesh: &EditMesh, s: usize, j: usize) -> u32 {
+pub(crate) fn poly_corner(mesh: &EditMesh, s: usize, j: usize) -> u32 {
     if j < 3 { mesh.tris[3 * s + j] } else { mesh.tris[3 * (s + j - 2) + 2] }
 }
 

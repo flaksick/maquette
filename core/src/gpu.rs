@@ -170,6 +170,46 @@ impl Gpu {
         self.cmd(CMD_INDEX, p, 0, vbytes, ibytes);
     }
 
+    /// Wireframe overlay (PNT-6): the polygon edges of page p, no triangulation diagonals, as
+    /// local index pairs in the arena. Each edge once: from the polygon where it runs from the
+    /// lower to the higher vertex id, or from its only polygon on a boundary. Replaces the batch;
+    /// returns the index count. Built only while the overlay is on, on top of the page's VBO, so
+    /// it adds index memory only (a quad mesh: 2 indices per triangle against 3 for the mesh).
+    pub fn edge_page(&mut self, mesh: &EditMesh, p: usize) -> usize {
+        self.arena.clear();
+        self.cmds.clear();
+        let page = &self.pages[p];
+        let first = mesh.bvh.leaf_tri_off[page.leaf_start as usize] as usize;
+        let end = mesh.bvh.leaf_tri_off[page.leaf_end as usize] as usize;
+        let directed = |a: u32, b: u32| {
+            let a = a as usize;
+            (mesh.topo.vt_off[a] as usize..mesh.topo.vt_off[a + 1] as usize).any(|i| {
+                let t = &mesh.tris[3 * mesh.topo.vt[i] as usize..3 * mesh.topo.vt[i] as usize + 3];
+                (0..3).any(|k| t[k] == a as u32 && t[(k + 1) % 3] == b)
+            })
+        };
+        let mut n = 0;
+        let mut s = first;
+        while s < end {
+            let mut e = s;
+            while e + 1 < end && mesh.poly_next[e] != 0 {
+                e += 1;
+            }
+            let corners = e - s + 3;
+            for j in 0..corners {
+                let u = crate::brushes::poly_corner(mesh, s, j);
+                let v = crate::brushes::poly_corner(mesh, s, (j + 1) % corners);
+                if u < v || !directed(v, u) {
+                    self.arena.extend_from_slice(&page.local(u).to_le_bytes());
+                    self.arena.extend_from_slice(&page.local(v).to_le_bytes());
+                    n += 2;
+                }
+            }
+            s = e + 1;
+        }
+        n
+    }
+
     /// Packs the vertex data of changed leaves (and every foreign copy of their vertices).
     /// Adjacent leaves in one page coalesce into one command.
     pub fn update(&mut self, mesh: &EditMesh, dirty_leaves: &mut Vec<u32>) {
@@ -252,6 +292,60 @@ mod tests {
             }
         }
         assert_eq!(k as u32, page.nindices);
+    }
+
+    /// Every polygon edge of every page, as global vertex pairs.
+    fn all_edges(mesh: &EditMesh) -> Vec<(u32, u32)> {
+        let mut gpu = Gpu::build(mesh);
+        let mut out = Vec::new();
+        for p in 0..gpu.pages.len() {
+            let n = gpu.edge_page(mesh, p);
+            let page = &gpu.pages[p];
+            let global = |l: u32| if (l as usize) < (page.vend - page.vstart) as usize { page.vstart + l } else { page.foreign[l as usize - (page.vend - page.vstart) as usize] };
+            for k in 0..n / 2 {
+                let rd = |i: usize| u32::from_le_bytes(gpu.arena[4 * i..4 * i + 4].try_into().unwrap());
+                let (a, b) = (global(rd(2 * k)), global(rd(2 * k + 1)));
+                out.push((a.min(b), a.max(b)));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn pnt6_wireframe_draws_each_polygon_edge_once() {
+        // Closed all-quad sphere: 6n^2 quads have 12n^2 edges; no triangle diagonal is drawn.
+        let n = 24u32;
+        let mesh = EditMesh::from_trimesh(cube_sphere(n), 256);
+        let edges = all_edges(&mesh);
+        let unique: std::collections::HashSet<_> = edges.iter().copied().collect();
+        assert_eq!(edges.len(), (12 * n * n) as usize, "each quad edge once");
+        assert_eq!(unique.len(), edges.len());
+        let mut tri_edges = std::collections::HashSet::new();
+        for t in mesh.tris.chunks(3) {
+            for k in 0..3 {
+                tri_edges.insert((t[k].min(t[(k + 1) % 3]), t[k].max(t[(k + 1) % 3])));
+            }
+        }
+        assert_eq!(tri_edges.len() - unique.len(), (6 * n * n) as usize, "the one diagonal per quad is left out");
+        // Open quad grid: boundary edges (one polygon only) are drawn too: 2g(g+1) edges.
+        let g = 6u32;
+        let mut m = crate::sphere::TriMesh { positions: Vec::new(), tris: Vec::new(), poly_next: Vec::new() };
+        for j in 0..=g {
+            for i in 0..=g {
+                m.positions.extend_from_slice(&[i as f32, j as f32, 0.0]);
+            }
+        }
+        for j in 0..g {
+            for i in 0..g {
+                let (a, b, c, d) = (j * (g + 1) + i, j * (g + 1) + i + 1, (j + 1) * (g + 1) + i + 1, (j + 1) * (g + 1) + i);
+                m.tris.extend_from_slice(&[a, b, c, a, c, d]);
+                m.poly_next.extend_from_slice(&[1, 0]);
+            }
+        }
+        let grid = all_edges(&EditMesh::from_trimesh(m, 8));
+        assert_eq!(grid.len(), (2 * g * (g + 1)) as usize);
+        let indices = 2 * edges.len();
+        println!("pnt6 wireframe: sphere {n}: {} edges = {indices} indices vs {} mesh indices (+{:.0}% of the page index bytes); grid {g}: {} edges with its boundary", edges.len(), mesh.tris.len(), 100.0 * indices as f64 / mesh.tris.len() as f64, grid.len());
     }
 
     #[test]

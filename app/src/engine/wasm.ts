@@ -29,6 +29,7 @@ export interface Exports {
   eng_gpu_page_sizes(p: number, out: number): void;
   eng_gpu_full_page(p: number): number;
   eng_gpu_arena_ptr(): number;
+  eng_gpu_edge_page(p: number): number;
   eng_gpu_cmds_ptr(): number;
   eng_positions_ptr(): number;
   eng_positions_bytes(): number;
