@@ -1,5 +1,6 @@
 {
- "version": "2a55b5f469a6",
+ "version": "4e18657b5563",
+ "entry": "entry.html",
  "files": [
   {
    "url": "assets/balloon.worker-Dg78DWow.js",
@@ -27,9 +28,9 @@
    "sha256": "ac4359a02578698c42eecd25597554fda13dba4f677e8ce30454c89bfed91022"
   },
   {
-   "url": "assets/index-BwHSHgSB.js",
-   "bytes": 79832,
-   "sha256": "445ddc8faf08695430b3cf8f52de9109602776924598687d552f2542bdc3d423"
+   "url": "assets/index-15ol6BsL.js",
+   "bytes": 80661,
+   "sha256": "6aca02f689efa4c17683ac54ff4a7749f9e97d98f95f15d91217ce5708e71de8"
   },
   {
    "url": "assets/index-CmE-3-Ii.css",
@@ -45,6 +46,11 @@
    "url": "assets/stress.worker-C3JmxH8x.js",
    "bytes": 1098,
    "sha256": "cf13c3cdf704b51ae3df37459d3858bd0075d4e5ffd1ecbcb67abc59655956e7"
+  },
+  {
+   "url": "entry.html",
+   "bytes": 864,
+   "sha256": "60f4e5342768cf0250e58d9b4f3633aba32a3228c92c4f437548febf94787006"
   },
   {
    "url": "icons/app-180.png",
@@ -64,7 +70,7 @@
   {
    "url": "index.html",
    "bytes": 834,
-   "sha256": "d87ed9da09ee45ed577ce88b965e4956b8b3249107f9a5f0c165b816fad5db98"
+   "sha256": "e2c920f752c6ecff96f89666921aa2da8209a864c09b474ffe638f9b11c8957c"
   },
   {
    "url": "manifest.webmanifest",
