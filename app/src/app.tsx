@@ -14,6 +14,7 @@ import { ExportFormat, ImportButton, ImportSheet, requestExport } from './io-ui'
 import { budget, benchRun, stressRun, runBench, startStressTest, markKillTest, deviceFeatures } from './budget-client';
 import { budgetSource, ceilingSource, fmtMB, fmtTris, shortSource, APP_BYTES_PER_TRI } from './budget';
 import { RemeshButton, RemeshProgress, RemeshSheet } from './remesh'; // TOP-1
+import { DyntopoButton, DyntopoPanel } from './dyntopo-ui'; // TOP-3
 
 const TOOLS: { id: ToolName; label: string; feature: string }[] = [
   { id: 'draw', label: 'Draw', feature: 'BRS-1' },
@@ -72,6 +73,7 @@ function TopBar() {
         <button data-feature="PRM-1" onClick={() => (ui.sheet.value = 'new')}>New</button>
         <ImportButton />
         <RemeshButton />
+        <DyntopoButton />
         <button data-feature="EXP-7" onClick={() => {
           ui.exportFile.value = null;
           ui.sheet.value = 'export';
@@ -543,6 +545,7 @@ export function App() {
         <Notice />
         <GestureCard />
         <RemeshProgress />
+        <DyntopoPanel />
         {!ui.ready.value && <div class="loading">Loading your sculpt…</div>}
       </main>
       {sheet === 'new' && <NewSheet />}
