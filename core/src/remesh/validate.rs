@@ -43,8 +43,13 @@ pub fn validate(nverts: usize, tris: &[u32]) -> Report {
     let mut r = Report::default();
     // (undirected key, forward?, corner of the edge's first vertex)
     let mut edges: Vec<(u64, u32)> = Vec::with_capacity(tris.len());
+    // A slot whose three corners are equal is a dead dyntopo slot (TOP-3), not a triangle.
+    let live = |t: usize| !(tris[3 * t] == tris[3 * t + 1] && tris[3 * t + 1] == tris[3 * t + 2]);
     for t in 0..ntri {
         let c = &tris[3 * t..3 * t + 3];
+        if !live(t) {
+            continue;
+        }
         if c[0] == c[1] || c[1] == c[2] || c[0] == c[2] {
             r.degenerate_tris += 1;
         }
@@ -101,6 +106,9 @@ pub fn validate(nverts: usize, tris: &[u32]) -> Report {
     let mut bad = vec![false; nverts];
     let mut used = vec![false; nverts];
     for c in 0..tris.len() as u32 {
+        if !live(c as usize / 3) {
+            continue;
+        }
         let v = tris[c as usize] as usize;
         used[v] = true;
         let root = find(&mut corner, c);
@@ -113,11 +121,12 @@ pub fn validate(nverts: usize, tris: &[u32]) -> Report {
     r.nonmanifold_verts = bad.iter().filter(|&&b| b).count();
     let mut roots = 0;
     for t in 0..ntri as u32 {
-        if find(&mut tri_parent, t) == t {
+        if live(t as usize) && find(&mut tri_parent, t) == t {
             roots += 1;
         }
     }
     r.components = roots;
+    let ntri = (0..ntri).filter(|&t| live(t)).count();
     let v = used.iter().filter(|&&u| u).count() as i64;
     r.euler = v - nedges + ntri as i64;
     r

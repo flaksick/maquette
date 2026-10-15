@@ -1,11 +1,39 @@
 //! Static adjacency in CSR form: vertex -> triangles and vertex -> one-ring vertices.
 //! (P1a replaces this with the corner table; P0 uses it for the benchmark kernels.)
 
+#[derive(Default)]
 pub struct Topo {
     pub vt_off: Vec<u32>,
     pub vt: Vec<u32>,
     pub vv_off: Vec<u32>,
     pub vv: Vec<u32>,
+    /// Dynamic adjacency (dyntopo, TOP-3): per-vertex live length and capacity of the list that
+    /// starts at `vt_off[v]` / `vv_off[v]`. Empty = static CSR (`off[v]..off[v+1]`).
+    pub vt_len: Vec<u32>,
+    pub vt_cap: Vec<u32>,
+    pub vv_len: Vec<u32>,
+    pub vv_cap: Vec<u32>,
+}
+
+impl Topo {
+    #[inline]
+    pub fn is_dynamic(&self) -> bool {
+        !self.vt_len.is_empty()
+    }
+    /// Triangles around vertex v.
+    #[inline]
+    pub fn vtris(&self, v: usize) -> &[u32] {
+        let s = self.vt_off[v] as usize;
+        let e = if self.vt_len.is_empty() { self.vt_off[v + 1] as usize } else { s + self.vt_len[v] as usize };
+        &self.vt[s..e]
+    }
+    /// One-ring vertices of vertex v.
+    #[inline]
+    pub fn vverts(&self, v: usize) -> &[u32] {
+        let s = self.vv_off[v] as usize;
+        let e = if self.vv_len.is_empty() { self.vv_off[v + 1] as usize } else { s + self.vv_len[v] as usize };
+        &self.vv[s..e]
+    }
 }
 
 pub fn build(nv: usize, tris: &[u32]) -> Topo {
@@ -45,7 +73,7 @@ pub fn build(nv: usize, tris: &[u32]) -> Topo {
         vv.extend_from_slice(&ring);
         vv_off.push(vv.len() as u32);
     }
-    Topo { vt_off, vt, vv_off, vv }
+    Topo { vt_off, vt, vv_off, vv, ..Default::default() }
 }
 
 #[cfg(test)]

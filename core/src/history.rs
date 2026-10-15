@@ -45,15 +45,34 @@ pub struct LeafStates {
     /// Float offset of each leaf's data in `data` (len = leaves + 1).
     pub off: Vec<u32>,
     pub data: Vec<f32>,
+    /// Dyntopo (TOP-3): each leaf's whole triangle slab (all slots, dead ones included) and its
+    /// polygon-run bits, in leaf order. Empty = a position-only state.
+    pub tris: Vec<u32>,
+    pub pn: Vec<u8>,
 }
 
 impl LeafStates {
     pub fn bytes(&self) -> usize {
-        self.data.len() * 4 + self.leaves.len() * 8
+        self.data.len() * 4 + self.leaves.len() * 8 + self.tris.len() * 4 + self.pn.len()
+    }
+
+    pub fn is_topo(&self) -> bool {
+        !self.tris.is_empty()
+    }
+
+    /// Positions and (dyntopo) triangle slabs of the given leaves.
+    pub fn capture_topo(mesh: &EditMesh, leaves: &[u32]) -> LeafStates {
+        let mut s = LeafStates::capture(mesh, leaves);
+        for &leaf in leaves {
+            let (t0, t1) = (mesh.bvh.leaf_tri_off[leaf as usize] as usize, mesh.bvh.leaf_tri_off[leaf as usize + 1] as usize);
+            s.tris.extend_from_slice(&mesh.tris[3 * t0..3 * t1]);
+            s.pn.extend_from_slice(&mesh.poly_next[t0..t1]);
+        }
+        s
     }
 
     pub fn capture(mesh: &EditMesh, leaves: &[u32]) -> LeafStates {
-        let mut s = LeafStates { leaves: leaves.to_vec(), off: vec![0], data: Vec::new() };
+        let mut s = LeafStates { leaves: leaves.to_vec(), off: vec![0], ..Default::default() };
         for &leaf in leaves {
             let (a, b) = mesh.leaf_range(leaf as usize);
             s.data.extend_from_slice(&mesh.positions[3 * a..3 * b]);
@@ -67,6 +86,15 @@ impl LeafStates {
             let (a, b) = mesh.leaf_range(leaf as usize);
             mesh.positions[3 * a..3 * b].copy_from_slice(&self.data[self.off[i] as usize..self.off[i + 1] as usize]);
         }
+        if self.is_topo() {
+            let mut at = 0;
+            for &leaf in &self.leaves {
+                let (t0, t1) = (mesh.bvh.leaf_tri_off[leaf as usize] as usize, mesh.bvh.leaf_tri_off[leaf as usize + 1] as usize);
+                let n = t1 - t0;
+                crate::dyntopo::write_leaf_tris(mesh, leaf as usize, &self.tris[3 * at..3 * (at + n)], &self.pn[at..at + n]);
+                at += n;
+            }
+        }
     }
 }
 
@@ -78,16 +106,18 @@ pub struct Transaction {
     id: u32,
     pub before: LeafStates,
     pub active: bool,
+    /// Dyntopo stroke: first touches also copy the leaf's triangle slab.
+    pub topo: bool,
 }
 
 impl Transaction {
     pub fn new(nleaves: usize) -> Transaction {
-        Transaction { stamp: vec![0; nleaves], slot: vec![0; nleaves], id: 1, before: LeafStates::default(), active: false }
+        Transaction { stamp: vec![0; nleaves], slot: vec![0; nleaves], id: 1, before: LeafStates::default(), active: false, topo: false }
     }
 
     pub fn begin(&mut self) {
         self.id = self.id.wrapping_add(1).max(1);
-        self.before = LeafStates { leaves: Vec::new(), off: vec![0], data: Vec::new() };
+        self.before = LeafStates { leaves: Vec::new(), off: vec![0], ..Default::default() };
         self.active = true;
     }
 
@@ -103,6 +133,17 @@ impl Transaction {
         self.before.leaves.push(leaf);
         self.before.data.extend_from_slice(&mesh.positions[3 * a..3 * b]);
         self.before.off.push(self.before.data.len() as u32);
+        if self.topo {
+            let (t0, t1) = (mesh.bvh.leaf_tri_off[leaf as usize] as usize, mesh.bvh.leaf_tri_off[leaf as usize + 1] as usize);
+            self.before.tris.extend_from_slice(&mesh.tris[3 * t0..3 * t1]);
+            self.before.pn.extend_from_slice(&mesh.poly_next[t0..t1]);
+        }
+    }
+
+    /// Whether this transaction already holds the leaf's before-state.
+    #[inline]
+    pub fn has(&self, leaf: u32) -> bool {
+        self.stamp[leaf as usize] == self.id
     }
 
     pub fn touched(&self) -> &[u32] {

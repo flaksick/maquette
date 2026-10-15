@@ -249,9 +249,8 @@ impl Engine {
             self.refit_leaves.clear();
             for i in 0..self.modified.list.len() {
                 let v = self.modified.list[i] as usize;
-                for j in self.mesh.topo.vt_off[v] as usize..self.mesh.topo.vt_off[v + 1] as usize {
-                    let t = self.mesh.topo.vt[j] as usize;
-                    self.refit_leaves.insert(self.mesh.leaf_of_tri[t]);
+                for &t in self.mesh.topo.vtris(v) {
+                    self.refit_leaves.insert(self.mesh.leaf_of_tri[t as usize]);
                 }
             }
             let refit = std::mem::take(&mut self.refit_leaves.list);
@@ -399,14 +398,11 @@ impl Engine {
         for i in 0..self.modified.list.len() {
             let v = self.modified.list[i] as usize;
             self.normal_set.insert(v as u32);
-            let (a, b) = (self.mesh.topo.vv_off[v] as usize, self.mesh.topo.vv_off[v + 1] as usize);
-            for j in a..b {
-                let w = self.mesh.topo.vv[j];
+            for &w in self.mesh.topo.vverts(v) {
                 self.normal_set.insert(w);
             }
-            for j in self.mesh.topo.vt_off[v] as usize..self.mesh.topo.vt_off[v + 1] as usize {
-                let t = self.mesh.topo.vt[j] as usize;
-                self.refit_leaves.insert(self.mesh.leaf_of_tri[t]);
+            for &t in self.mesh.topo.vtris(v) {
+                self.refit_leaves.insert(self.mesh.leaf_of_tri[t as usize]);
             }
             let leaf = self.mesh.leaf_of_vertex[v];
             if leaf != NONE {
