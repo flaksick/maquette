@@ -382,8 +382,8 @@ fn poly_area2<F: Fn(usize) -> [f32; 3]>(mesh: &EditMesh, pos: &F, s: usize, k: u
 fn poly_normal<F: Fn(usize) -> [f32; 3]>(mesh: &EditMesh, pos: &F, v: usize) -> [f32; 3] {
     let mut acc = [0.0f64; 3];
     let mut last = usize::MAX;
-    for i in mesh.topo.vt_off[v] as usize..mesh.topo.vt_off[v + 1] as usize {
-        let (s, k) = poly_run(mesh, mesh.topo.vt[i] as usize);
+    for &tv in mesh.topo.vtris(v) {
+        let (s, k) = poly_run(mesh, tv as usize);
         if s == last {
             continue; // the same polygon's next triangle (vt is sorted, runs are contiguous)
         }
@@ -400,8 +400,8 @@ fn poly_normal<F: Fn(usize) -> [f32; 3]>(mesh: &EditMesh, pos: &F, v: usize) -> 
 fn poly_ring(mesh: &EditMesh, v: usize, out: &mut Vec<u32>) {
     let start = out.len();
     let mut last = usize::MAX;
-    for i in mesh.topo.vt_off[v] as usize..mesh.topo.vt_off[v + 1] as usize {
-        let (s, k) = poly_run(mesh, mesh.topo.vt[i] as usize);
+    for &tv in mesh.topo.vtris(v) {
+        let (s, k) = poly_run(mesh, tv as usize);
         if s == last {
             continue;
         }

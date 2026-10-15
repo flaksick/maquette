@@ -42,7 +42,8 @@ pub unsafe extern "C" fn eng_import(ptr: *const u8, len: u32, hint: u32, leaf_ma
 pub unsafe extern "C" fn eng_export_stl(scale: f32, info: *mut u32) -> u32 {
     with_engine(|e| {
         let mut buf = std::mem::take(&mut e.out);
-        let st = super::stl::write_binary(&e.mesh, scale, &mut buf);
+        let compact = crate::dyntopo::compact(&e.mesh); // dyntopo slack: live triangles only
+        let st = super::stl::write_binary(compact.as_ref().unwrap_or(&e.mesh), scale, &mut buf);
         e.out = buf;
         unsafe {
             *info = st.triangles;

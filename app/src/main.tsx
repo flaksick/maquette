@@ -11,6 +11,7 @@ import { bus } from './bus';
 import { InputController } from './input';
 import { registerServiceWorker, reportBootOk, reverted } from './sw-client';
 import { onRemeshEvent } from './remesh';
+import { onDyntopoStatus } from './dyntopo-ui';
 import { call, connectLibrary, onEngineMessage, openProject, refreshProjects, watchStorage } from './projects';
 import { holdPresets, loadPrefs, onProjectOpened, prefs, savePrefsNow, setPref } from './prefs';
 import { io, ioMessage } from './io-ui';
@@ -138,6 +139,9 @@ function onEngine(m: FromEngine): void {
       break;
     case 'remesh':
       onRemeshEvent(m.ev);
+      break;
+    case 'dyntopo':
+      onDyntopoStatus(m.status);
       break;
     case 'budget':
       onBudget(m);

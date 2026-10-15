@@ -513,6 +513,7 @@ impl Builder {
                 vt: std::mem::take(&mut self.vt),
                 vv_off: std::mem::take(&mut self.vv_off),
                 vv: std::mem::take(&mut self.vv),
+                ..Default::default()
             },
             bvh,
             leaf_of_vertex: std::mem::take(&mut self.leaf_of_vertex),

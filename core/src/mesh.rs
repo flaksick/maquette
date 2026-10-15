@@ -190,8 +190,8 @@ impl EditMesh {
     /// Area-weighted vertex normal from the incident triangles.
     pub fn vertex_normal(&mut self, v: usize) {
         let mut n = [0.0f32; 3];
-        for i in self.topo.vt_off[v] as usize..self.topo.vt_off[v + 1] as usize {
-            let t = 3 * self.topo.vt[i] as usize;
+        for &tt in self.topo.vtris(v) {
+            let t = 3 * tt as usize;
             let a = get3(&self.positions, self.tris[t] as usize);
             let b = get3(&self.positions, self.tris[t + 1] as usize);
             let c = get3(&self.positions, self.tris[t + 2] as usize);
@@ -201,7 +201,7 @@ impl EditMesh {
     }
 
     pub fn neighbors(&self, v: usize) -> &[u32] {
-        &self.topo.vv[self.topo.vv_off[v] as usize..self.topo.vv_off[v + 1] as usize]
+        self.topo.vverts(v)
     }
 
     /// Nearest intersection of the ray o + t·d (t > 0) with the mesh, both faces counted.

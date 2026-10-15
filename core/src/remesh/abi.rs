@@ -251,6 +251,47 @@ pub extern "C" fn eng_remesh_finish() -> u32 {
     })
 }
 
+/// Installs a mesh made by a one-shot heavy op (dyntopo relayout): the current mesh becomes an
+/// undo epoch when it fits the history budget. Returns (new topology length, undoable); the
+/// topology bytes wait at eng_heavy_topo_ptr for the save.
+pub(crate) fn install_heavy(mesh: crate::mesh::EditMesh) -> (u32, bool) {
+    HEAVY.with(|h| {
+        let mut h = h.borrow_mut();
+        h.running = None;
+        let Some((hist, seq, topo, pos)) = with_engine(|e| {
+            let hist = std::mem::replace(&mut e.hist, History::new(0, 1));
+            (hist, e.seq, store::topo_bytes(&e.mesh), store::positions_bytes(&e.mesh))
+        }) else {
+            return (0, false);
+        };
+        let (budget, max_steps) = (hist.budget_bytes + epoch_bytes(&h), hist.max_steps);
+        let undoable = topo.len() + pos.len() <= budget;
+        if undoable {
+            let mut ep = Epoch { topo, pos, hist };
+            h.fwd.clear();
+            while !h.back.is_empty() && ep.bytes() + epoch_bytes(&h) > budget {
+                h.back.remove(0);
+            }
+            if ep.bytes() > budget {
+                ep.hist.clear();
+            }
+            h.back.push(ep);
+        } else {
+            h.back.clear();
+            h.fwd.clear();
+        }
+        h.out_topo = store::topo_bytes(&mesh);
+        let held = epoch_bytes(&h);
+        install_mesh(mesh);
+        with_engine(|e| {
+            e.seq = seq + 1;
+            e.hist = History::new(budget.saturating_sub(held).max(1), max_steps);
+        });
+        h.info = None;
+        (h.out_topo.len() as u32, undoable)
+    })
+}
+
 /// Topology file of the mesh installed by the last finish / heavy undo / heavy redo.
 #[unsafe(no_mangle)]
 pub extern "C" fn eng_heavy_topo_ptr() -> *const u8 {

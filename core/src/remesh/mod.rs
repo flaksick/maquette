@@ -444,7 +444,7 @@ impl Job {
                 let a = m.tris[3 * t + k];
                 let b = m.tris[3 * t + (k + 1) % 3];
                 let mut shared = false;
-                for &t2 in &m.topo.vt[m.topo.vt_off[a as usize] as usize..m.topo.vt_off[a as usize + 1] as usize] {
+                for &t2 in m.topo.vtris(a as usize) {
                     if t2 as usize != t && m.tris[3 * t2 as usize..3 * t2 as usize + 3].contains(&b) {
                         shared = true;
                         break;

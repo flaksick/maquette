@@ -14,6 +14,7 @@ pub mod math;
 pub mod objio;
 pub mod primitives;
 pub mod mesh;
+pub mod dyntopo;
 pub mod remesh;
 pub mod simd;
 pub mod sphere;
