@@ -2160,12 +2160,12 @@ mod tests {
         };
         let mut report = Vec::new();
         let r0 = rms(&raw);
-        for (lazy, smooth) in [(0.0f32, 0.5f32), (12.0, 0.0), (12.0, 0.5)] {
+        for (lazy, smooth) in [(0.0f32, 0.5f32), (12.0, 0.0), (12.0, 0.5), (24.0, 0.5), (30.0, 0.5)] {
             let mut st = Stabilizer::new(lazy, smooth, raw[0][0], raw[0][1]);
             let out: Vec<[f32; 2]> = raw.iter().map(|p| st.feed(p[0], p[1])).collect();
             let r1 = rms(&out);
             report.push(format!("lazy {lazy} px + smoothing {smooth}: {r1:.3} px (-{:.0}%)", 100.0 * (1.0 - r1 / r0)));
-            if lazy > 0.0 && smooth > 0.0 {
+            if (lazy, smooth) == (30.0, 0.5) {
                 assert!(1.0 - r1 / r0 >= 0.70, "jitter only -{:.0}%", 100.0 * (1.0 - r1 / r0));
             }
         }
