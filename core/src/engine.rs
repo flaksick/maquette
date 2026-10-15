@@ -31,6 +31,8 @@ pub struct Camera {
     pub width: f32,
     pub height: f32,
     pub px_to_world: f32,
+    /// NAV-4: world size of one pixel in an orthographic view (0 = perspective).
+    pub ortho_px: f32,
 }
 
 pub const CAMERA_FLOATS: usize = 26;
@@ -46,6 +48,7 @@ impl Camera {
             width: c[22].max(1.0),
             height: c[23].max(1.0),
             px_to_world: c[24],
+            ortho_px: c[25].max(0.0),
         }
     }
 
@@ -70,8 +73,21 @@ impl Camera {
     }
 
     pub fn world_radius(&self, radius_px: f32, at: [f32; 3]) -> f32 {
+        if self.ortho_px > 0.0 {
+            return radius_px * self.ortho_px; // parallel projection: same size at every depth
+        }
         let depth = dot(sub(at, self.eye), self.forward).max(1e-4);
         radius_px * depth * self.px_to_world
+    }
+
+    /// Direction from a point toward the viewer: toward the eye in perspective, against the view
+    /// direction everywhere in an orthographic view.
+    pub fn to_eye(&self, p: [f32; 3]) -> [f32; 3] {
+        if self.ortho_px > 0.0 {
+            [-self.forward[0], -self.forward[1], -self.forward[2]]
+        } else {
+            sub(self.eye, p)
+        }
     }
 }
 
@@ -479,7 +495,7 @@ pub mod tests_support {
         use crate::mat4::{invert, look_at, mul, perspective};
         let fov = 0.785_398_2f32;
         let vp = mul(&perspective(fov, w / h, 0.1, 20.0), &look_at(eye, [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]));
-        Camera { inv_view_proj: invert(&vp).unwrap(), eye, forward: normalize(sub([0.0, 0.0, 0.0], eye)), width: w, height: h, px_to_world: 2.0 * (fov / 2.0).tan() / h }
+        Camera { inv_view_proj: invert(&vp).unwrap(), eye, forward: normalize(sub([0.0, 0.0, 0.0], eye)), width: w, height: h, px_to_world: 2.0 * (fov / 2.0).tan() / h, ortho_px: 0.0 }
     }
 }
 
@@ -502,7 +518,7 @@ mod tests {
         let fov = 0.785_398_2f32;
         let vp = mul(&perspective(fov, w / h, 0.1, 20.0), &look_at(eye, [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]));
         let forward = normalize(sub([0.0, 0.0, 0.0], eye));
-        Camera { inv_view_proj: invert(&vp).unwrap(), eye, forward, width: w, height: h, px_to_world: 2.0 * (fov / 2.0).tan() / h }
+        Camera { inv_view_proj: invert(&vp).unwrap(), eye, forward, width: w, height: h, px_to_world: 2.0 * (fov / 2.0).tan() / h, ortho_px: 0.0 }
     }
 
     /// Mirror partner of every vertex (nearest vertex to (-x, y, z), within 1e-5).
@@ -533,6 +549,38 @@ mod tests {
                 best.1
             })
             .collect()
+    }
+
+    /// An orthographic camera looking at the origin (NAV-4), `half_h` world units tall above centre.
+    fn test_ortho_camera(eye: [f32; 3], w: f32, h: f32, half_h: f32) -> Camera {
+        use crate::mat4::{invert, look_at, mul};
+        let half_w = half_h * w / h;
+        let (n, f) = (-10.0f32, 10.0f32);
+        let proj = [1.0 / half_w, 0.0, 0.0, 0.0, 0.0, 1.0 / half_h, 0.0, 0.0, 0.0, 0.0, 2.0 / (n - f), 0.0, 0.0, 0.0, (f + n) / (n - f), 1.0];
+        let vp = mul(&proj, &look_at(eye, [0.0, 0.0, 0.0], [0.0, 1.0, 0.0]));
+        let forward = normalize(sub([0.0, 0.0, 0.0], eye));
+        Camera { inv_view_proj: invert(&vp).unwrap(), eye, forward, width: w, height: h, px_to_world: 2.0 * (0.785_398_2f32 / 2.0).tan() / h, ortho_px: 2.0 * half_h / h }
+    }
+
+    #[test]
+    fn nav4_ortho_rays_are_parallel_dab_radius_ignores_depth_and_a_stroke_lands() {
+        let mut e = engine(32);
+        e.cam = test_ortho_camera([0.0, 0.0, 3.0], 800.0, 800.0, 1.5);
+        let (_, d0) = e.cam.ray(400.0, 400.0);
+        let (_, d1) = e.cam.ray(100.0, 650.0);
+        assert!(len_sq(sub(d0, d1)) < 1e-10, "ortho rays must be parallel: {d0:?} vs {d1:?}");
+        let hit = e.raycast_screen(400.0, 400.0).expect("centre ray hits the sphere");
+        assert!((hit.point[2] - 1.0).abs() < 0.01, "hit z {}", hit.point[2]);
+        let near = e.cam.world_radius(50.0, hit.point);
+        let far = e.cam.world_radius(50.0, [0.0, 0.0, -1.0]);
+        assert!((near - far).abs() < 1e-7 && (near - 50.0 * 3.0 / 800.0).abs() < 1e-6, "radius {near} vs {far}");
+        assert_eq!(e.cam.to_eye([0.3, 0.2, 0.9]), [-0.0, -0.0, 1.0]);
+        // A draw stroke through the orthographic camera changes the mesh.
+        let before = e.mesh.position_hash();
+        e.stroke_begin(380.0, 400.0, 1.0);
+        e.stroke_move(&[400.0, 400.0, 1.0, 420.0, 405.0, 1.0]);
+        assert!(e.stroke_end() > 0);
+        assert_ne!(e.mesh.position_hash(), before);
     }
 
     #[test]

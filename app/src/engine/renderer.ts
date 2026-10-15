@@ -35,11 +35,12 @@ const MESH_FS = `#version 300 es
 precision highp float;
 in vec3 vN;
 in vec3 vViewPos;
+uniform float uOrtho;
 out vec4 o;
 void main() {
   vec3 n = normalize(vN);
   if (!gl_FrontFacing) n = -n;
-  vec3 v = normalize(-vViewPos);
+  vec3 v = uOrtho > 0.5 ? vec3(0.0, 0.0, 1.0) : normalize(-vViewPos); // NAV-4: parallel view rays in ortho
   vec3 l = normalize(vec3(-0.45, 0.55, 0.7));
   float diff = max(dot(n, l), 0.0);
   float wrap = max(dot(n, l) * 0.5 + 0.5, 0.0);
@@ -87,6 +88,7 @@ export class Renderer {
   private lineProg!: WebGLProgram;
   private uVP!: WebGLUniformLocation;
   private uView!: WebGLUniformLocation;
+  private uOrtho!: WebGLUniformLocation;
   private lineVP!: WebGLUniformLocation;
   private lineColor!: WebGLUniformLocation;
   private ringVao!: WebGLVertexArrayObject;
@@ -113,6 +115,7 @@ export class Renderer {
     this.lineProg = program(this.gl, LINE_VS, LINE_FS);
     this.uVP = this.gl.getUniformLocation(this.meshProg, 'uVP')!;
     this.uView = this.gl.getUniformLocation(this.meshProg, 'uView')!;
+    this.uOrtho = this.gl.getUniformLocation(this.meshProg, 'uOrtho')!;
     this.lineVP = this.gl.getUniformLocation(this.lineProg, 'uVP')!;
     this.lineColor = this.gl.getUniformLocation(this.lineProg, 'uColor')!;
     this.ringVao = this.gl.createVertexArray()!;
@@ -201,6 +204,7 @@ export class Renderer {
     gl.useProgram(this.meshProg);
     gl.uniformMatrix4fv(this.uVP, false, vp);
     gl.uniformMatrix4fv(this.uView, false, view);
+    gl.uniform1f(this.uOrtho, cam.ortho ? 1 : 0);
     for (const p of this.pages) {
       gl.bindVertexArray(p.vao);
       gl.drawElements(gl.TRIANGLES, p.indexCount, gl.UNSIGNED_INT, 0);
