@@ -71,6 +71,16 @@ button.primary {
   letter-spacing: 0.02em;
   margin-right: 6px;
 }
+/* Portrait iPads (820 px wide): the name gives way so every control and status chip stays on
+   screen, and if the bar ever outgrows the width it wraps instead of pushing chips off the edge. */
+.top {
+  flex-wrap: wrap;
+}
+@media (max-width: 900px) {
+  .brand {
+    display: none;
+  }
+}
 .group {
   display: flex;
   gap: 6px;
