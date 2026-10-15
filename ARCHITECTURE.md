@@ -81,6 +81,29 @@ Safari hides the iPad model and RAM, so limits are measured: a lab-measured clas
 (0.6 × the minimum observed ceiling), a non-crashing speed benchmark, and adaptive learning from
 the memory ledger's high-water marks across sessions. Every limit is shown with its source.
 
+## Safe updates (PLT-3, invariant 8)
+
+Prod root: the stable `sw.js` (no version inside; one URL forever), a boot `index.html` (first visit
+only), `versions.json`, the install metadata (`manifest.webmanifest`, `icons/`), and immutable
+folders `v/<id>/` (the newest 3; `entry.html` + `precache.json` with every file's SHA-256). Built by
+`scripts/release.mjs`, used by `deploy.mjs prod` and the e2e. The dev channel stays flat
+(`precache.json`), served by the same worker.
+- **Download:** the worker fetches a new version silently (app start, if automatic checks are on, or
+  the Settings button), verifies every file's SHA-256 into its own cache, and marks it pending.
+- **Switch:** only on a clean cold launch (a navigation while no Maquette window is open). A session
+  never changes version: its files are content-hashed and stay cached.
+- **Boot health:** the app posts boot-ok once it has opened a project; that version is good. An
+  unproven version launched twice without it is marked bad (never tried again) and the previous good
+  version is served again.
+- **Migration from the P1a/P1b worker:** the new worker adopts the installed version's cache
+  (`maquette-prod-<id>`) as a good version, so a bad first release falls back to exactly what was
+  installed. Its own caches use another prefix (`mq-<channel>-`), which the old worker never deletes.
+- **Data migrations** (none exist yet): a version that changes the project format writes migrated
+  data copy-on-write into a new root `app-<channel>@<schema>` and never modifies the old root. Until
+  that version is good, a revert serves the previous version, which still finds its root untouched;
+  older roots are deleted only once no kept version (newest 3) reads them. The hook belongs at
+  session start in the persist worker, before `open-last`.
+
 ## Blender as reference
 
 Blender's source is read for algorithms and constants only; nothing is transliterated, so the app

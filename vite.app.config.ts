@@ -22,6 +22,6 @@ export default defineConfig(({ mode }) => {
     },
     worker: { format: 'es' },
     define: { __CHANNEL__: JSON.stringify(channel) },
-    plugins: [precacheManifest(outDir, { __CHANNEL__: channel })],
+    plugins: [precacheManifest(outDir, { __CHANNEL__: channel }, { stampVersion: false })],
   };
 });

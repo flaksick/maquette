@@ -1,3 +1,5 @@
+import type { AxisView } from '../engine/camera';
+
 // Messages between the three threads. The main thread never touches the mesh (invariant 1);
 // the engine worker is its only writer (invariant 2); the persist worker owns storage.
 import type { BenchResult, BudgetChange, BudgetState, StressResult } from '../budget';
@@ -93,6 +95,9 @@ export type ToEngine =
   | { type: 'query' }
   // P1b projects (PRJ-1): load another project by id; PLT-11: retry records the disk refused.
   | { type: 'open-project'; id: string }
+  // NAV-4: snap to a Blender axis view (animated); perspective or orthographic projection.
+  | { type: 'view-axis'; view: AxisView }
+  | { type: 'projection'; ortho: boolean }
   | { type: 'disk-retry' }
   // ---- PLT-8 device budgets ----
   | { type: 'budget'; budget: BudgetState }
@@ -145,6 +150,9 @@ export type FromEngine =
   // P1b: the open project (after launch, new, open; `error` = a switch failed and this one stayed
   // open). `brushRestored` = the brush came from the project's saved state (PRJ-10).
   | { type: 'project'; id: string; name: string; brush: BrushState; brushRestored: boolean; error?: string; view?: ViewState }
+  // NAV-4: posted from a rendered frame whenever the camera changed (the navigation orb follows
+  // it; idle stays free). projW = projection matrix [11], [15]: (-1, 0) perspective, (0, 1) ortho.
+  | { type: 'camera'; yaw: number; pitch: number; ortho: boolean; forward: [number, number, number]; eye: [number, number, number]; projW: [number, number] }
   // PLT-11: the disk refused journal records; edits are blocked until they are saved.
   | { type: 'disk'; full: boolean; unsaved: number }
   // ---- PLT-8 device budgets: the budget in force after session-start learning ----

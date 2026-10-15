@@ -40,6 +40,7 @@ precision highp float;
 in vec3 vN;
 in vec3 vViewPos;
 uniform int uFlat;
+uniform float uOrtho;
 out vec4 o;
 void main() {
   // Flat (PNT-6): the face normal from screen-space derivatives of the view-space position,
@@ -48,7 +49,7 @@ void main() {
   vec3 n = normalize(vN);
   if (!gl_FrontFacing) n = -n;
   if (uFlat == 1) n = faceN;
-  vec3 v = normalize(-vViewPos);
+  vec3 v = uOrtho > 0.5 ? vec3(0.0, 0.0, 1.0) : normalize(-vViewPos); // NAV-4: parallel view rays in ortho
   vec3 l = normalize(vec3(-0.45, 0.55, 0.7));
   float diff = max(dot(n, l), 0.0);
   float wrap = max(dot(n, l) * 0.5 + 0.5, 0.0);
@@ -98,6 +99,7 @@ export class Renderer {
   private uView!: WebGLUniformLocation;
   private uFlat!: WebGLUniformLocation;
   view: View = { shading: 'smooth', wireframe: false };
+  private uOrtho!: WebGLUniformLocation;
   private lineVP!: WebGLUniformLocation;
   private lineColor!: WebGLUniformLocation;
   private ringVao!: WebGLVertexArrayObject;
@@ -125,6 +127,7 @@ export class Renderer {
     this.uVP = this.gl.getUniformLocation(this.meshProg, 'uVP')!;
     this.uView = this.gl.getUniformLocation(this.meshProg, 'uView')!;
     this.uFlat = this.gl.getUniformLocation(this.meshProg, 'uFlat')!;
+    this.uOrtho = this.gl.getUniformLocation(this.meshProg, 'uOrtho')!;
     this.lineVP = this.gl.getUniformLocation(this.lineProg, 'uVP')!;
     this.lineColor = this.gl.getUniformLocation(this.lineProg, 'uColor')!;
     this.ringVao = this.gl.createVertexArray()!;
@@ -252,6 +255,7 @@ export class Renderer {
     gl.useProgram(this.meshProg);
     gl.uniformMatrix4fv(this.uVP, false, vp);
     gl.uniformMatrix4fv(this.uView, false, view);
+    gl.uniform1f(this.uOrtho, cam.ortho ? 1 : 0);
     gl.uniform1i(this.uFlat, this.view.shading === 'flat' ? 1 : 0);
     const wire = this.view.wireframe;
     if (wire) {
