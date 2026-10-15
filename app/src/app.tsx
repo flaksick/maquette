@@ -40,6 +40,8 @@ const FALLOFF_LABEL: Record<FalloffName, string> = {
 /** Tools whose engine dab ignores these settings (so the panel hides them: no fake UI). */
 const NO_ACCUMULATE: ToolName[] = ['smooth', 'grab', 'snake-hook', 'layer'];
 const NO_AUTOSMOOTH: ToolName[] = ['smooth', 'grab'];
+/** Tools where Invert means something (core Tool::invertible). */
+const INVERTIBLE: ToolName[] = ['draw', 'inflate', 'clay', 'crease', 'pinch', 'layer', 'fill', 'scrape'];
 
 const fmt = (n: number) => n.toLocaleString('en-US');
 
@@ -134,12 +136,20 @@ function BrushPanel() {
           <input type="range" data-feature="STK-11" min={0} max={1} step={0.05} value={s.autosmooth} onInput={(e) => ui.setToolSetting({ autosmooth: Number((e.target as HTMLInputElement).value) })} />
         </label>
       )}
-      {!NO_ACCUMULATE.includes(t) && (
-        <label class="check">
-          <input type="checkbox" data-feature="STK-11" checked={s.accumulate} onChange={(e) => ui.setToolSetting({ accumulate: (e.target as HTMLInputElement).checked })} />
-          Accumulate
-        </label>
-      )}
+      <div class="checks">
+        {!NO_ACCUMULATE.includes(t) && (
+          <label class="check">
+            <input type="checkbox" data-feature="STK-11" checked={s.accumulate} onChange={(e) => ui.setToolSetting({ accumulate: (e.target as HTMLInputElement).checked })} />
+            Accumulate
+          </label>
+        )}
+        {INVERTIBLE.includes(t) && (
+          <label class="check">
+            <input type="checkbox" data-feature={TOOLS.find((x) => x.id === t)!.feature} checked={s.invert} onChange={(e) => ui.setToolSetting({ invert: (e.target as HTMLInputElement).checked })} />
+            Invert
+          </label>
+        )}
+      </div>
       <div class="axes">
         Mirror
         {axes.map(([name, sig]) => (
@@ -158,6 +168,35 @@ function BrushPanel() {
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+/** Hold-buttons at the left edge for the off hand (NAV-5): while one is held, a stroke that
+ *  starts smooths (Smooth) or inverts (Invert); the tool itself stays selected. */
+function HoldButtons() {
+  const h = ui.hold.value;
+  const bind = (key: 'smooth' | 'invert') => ({
+    onPointerDown: (e: PointerEvent) => {
+      try {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      } catch {
+        // synthetic or already-released pointers can't be captured; holding still works
+      }
+      ui.setHold(key, true);
+    },
+    onPointerUp: () => ui.setHold(key, false),
+    onPointerCancel: () => ui.setHold(key, false),
+    onLostPointerCapture: () => ui.setHold(key, false),
+  });
+  return (
+    <div class="holds">
+      <button data-feature="NAV-5" data-hold="smooth" class={h.smooth ? 'on' : ''} aria-pressed={h.smooth} aria-label="Hold to smooth" {...bind('smooth')}>
+        Smooth
+      </button>
+      <button data-feature="NAV-5" data-hold="invert" class={h.invert ? 'on' : ''} aria-pressed={h.invert} aria-label="Hold to invert" {...bind('invert')}>
+        Invert
+      </button>
     </div>
   );
 }
@@ -348,6 +387,16 @@ function SettingsSheet() {
           ui.pushBrush();
         }} />
         <span class="dim">{ui.gamma.value < 0.95 ? 'soft' : ui.gamma.value > 1.05 ? 'firm' : 'linear'}</span>
+      </label>
+      <label class="row">
+        Stabilizer
+        <input type="range" min={0} max={60} step={1} value={ui.stabilizer.value.lazyPx} data-feature="STK-3" onInput={(e) => ui.setStabilizer({ lazyPx: Number((e.target as HTMLInputElement).value) })} />
+        <span class="dim">{ui.stabilizer.value.lazyPx ? `${ui.stabilizer.value.lazyPx} px lag` : 'off'}</span>
+      </label>
+      <label class="row">
+        Smoothing
+        <input type="range" min={0} max={0.9} step={0.05} value={ui.stabilizer.value.smoothing} data-feature="STK-3" onInput={(e) => ui.setStabilizer({ smoothing: Number((e.target as HTMLInputElement).value) })} />
+        <span class="dim">{Math.round(ui.stabilizer.value.smoothing * 100)}%</span>
       </label>
       <label class="row toggle">
         <input type="checkbox" checked={auto} data-feature="PLT-2" onChange={(e) => {
@@ -564,6 +613,7 @@ export function App() {
       <DiskBanner />
       <main id="viewport">
         <Tools />
+        <HoldButtons />
         <Sliders />
         <Hud />
         <ViewButtons />

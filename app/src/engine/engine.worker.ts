@@ -237,7 +237,8 @@ function setBrush(b: BrushState): void {
   const flags = (b.pressureRadius ? 1 : 0) | (b.pressureStrength ? 2 : 0) | (b.symmetryX ? 4 : 0) | 8 | (b.symmetryY ? 16 : 0) | (b.symmetryZ ? 32 : 0);
   core.x.eng_set_brush(TOOL_ID[b.tool] ?? 0, b.radiusPx * dpr, b.strength, flags, b.gamma, 0.1);
   const falloff = Math.max(0, FALLOFFS.indexOf(b.falloff ?? 'smooth'));
-  core.x.eng_set_brush_ext(falloff, b.hardness ?? 0, b.autosmooth ?? 0, b.accumulate === false ? 0 : 1);
+  core.x.eng_set_brush_ext(falloff, b.hardness ?? 0, b.autosmooth ?? 0, (b.accumulate === false ? 0 : 1) | (b.invert ? 2 : 0));
+  core.x.eng_set_stroke((b.lazyPx ?? 0) * dpr, b.stabilize ?? 0);
 }
 
 function frameView(reset: boolean): void {
@@ -807,6 +808,9 @@ scope.onmessage = async (e: MessageEvent<ToEngine>) => {
       setBrush(brush);
       requestFrame();
       break;
+    case 'modifiers':
+      core.x.eng_set_modifiers((m.smooth ? 1 : 0) | (m.invert ? 2 : 0), m.smoothStrength);
+      break;
     case 'view':
       useView(m.view, true);
       saveStateSoon();
@@ -964,9 +968,16 @@ scope.onmessage = async (e: MessageEvent<ToEngine>) => {
       setBudget(m.budget);
       core.x.eng_set_history(Math.round(budgetMB() * 0.25), 200);
       break;
-    case 'query':
-      scope.postMessage({ type: 'query-result', hash: core.x.eng_hash().toString(16), stats: stats(), storageOk });
+    case 'query': {
+      // Optional probe (tests, diagnostics): the surface point under a canvas point (CSS px).
+      let hit: number[] | null | undefined;
+      if (m.x !== undefined && m.y !== undefined) {
+        commitCamera();
+        hit = core.x.eng_raycast(m.x * dpr, m.y * dpr) ? Array.from(core.f32s(core.x.eng_hit_ptr(), 3)) : null;
+      }
+      scope.postMessage({ type: 'query-result', hash: core.x.eng_hash().toString(16), stats: stats(), storageOk, hit });
       break;
+    }
     case 'remesh':
       remeshCmd(m.cmd);
       break;

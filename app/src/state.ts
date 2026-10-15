@@ -12,11 +12,13 @@ export interface ToolSetting {
   autosmooth: number;
   /** Sample the current surface (true) or the stroke-start one (false) (STK-11). */
   accumulate: boolean;
+  /** The opposite effect (BRS-1/4/6/7/8/10/11; other tools hide it). */
+  invert: boolean;
 }
 
 // Per-tool defaults. Crease is Dam Standard (sharp falloff); Clay Strips samples the stroke-start
 // surface so one stroke lays one strip; drags start at full strength.
-const tool = (radius: number, strength: number, more: Partial<ToolSetting> = {}): ToolSetting => ({ radius, strength, falloff: 'smooth', hardness: 0, autosmooth: 0, accumulate: true, ...more });
+const tool = (radius: number, strength: number, more: Partial<ToolSetting> = {}): ToolSetting => ({ radius, strength, falloff: 'smooth', hardness: 0, autosmooth: 0, accumulate: true, invert: false, ...more });
 const DEFAULTS: Record<ToolName, ToolSetting> = {
   draw: tool(40, 0.5),
   smooth: tool(50, 0.5),
@@ -58,6 +60,20 @@ export const ui = {
     ui.view.value = { ...ui.view.value, ...patch };
     bus.send({ type: 'view', view: ui.view.value });
   },
+  /** Stroke stabilizer (STK-3), for every tool: lazy radius (CSS px) and smoothing. */
+  stabilizer: signal({ lazyPx: 0, smoothing: 0 }),
+  setStabilizer(patch: Partial<{ lazyPx: number; smoothing: number }>): void {
+    ui.stabilizer.value = { ...ui.stabilizer.value, ...patch };
+    ui.pushBrush();
+  },
+  /** Hold buttons (NAV-5): held Smooth makes the next stroke a Smooth stroke (with the Smooth
+   *  tool's strength), held Invert inverts it; the engine reads them when a stroke starts. */
+  hold: signal({ smooth: false, invert: false }),
+  setHold(key: 'smooth' | 'invert', on: boolean): void {
+    if (ui.hold.value[key] === on) return;
+    ui.hold.value = { ...ui.hold.value, [key]: on };
+    bus.send({ type: 'modifiers', ...ui.hold.value, smoothStrength: ui.tools.value.smooth.strength });
+  },
   symmetryY: signal(false),
   symmetryZ: signal(false),
   gamma: signal(1),
@@ -82,6 +98,9 @@ export const ui = {
       hardness: s.hardness,
       autosmooth: s.autosmooth,
       accumulate: s.accumulate,
+      invert: s.invert,
+      lazyPx: ui.stabilizer.value.lazyPx,
+      stabilize: ui.stabilizer.value.smoothing,
     };
   },
 
@@ -96,10 +115,11 @@ export const ui = {
     ui.symmetryY.value = b.symmetryY ?? false;
     ui.symmetryZ.value = b.symmetryZ ?? false;
     ui.gamma.value = b.gamma;
+    ui.stabilizer.value = { lazyPx: b.lazyPx ?? 0, smoothing: b.stabilize ?? 0 };
     const d = ui.tools.value[b.tool];
     ui.tools.value = {
       ...ui.tools.value,
-      [b.tool]: { ...d, radius: b.radiusPx, strength: b.strength, falloff: b.falloff ?? d.falloff, hardness: b.hardness ?? d.hardness, autosmooth: b.autosmooth ?? d.autosmooth, accumulate: b.accumulate ?? d.accumulate },
+      [b.tool]: { ...d, radius: b.radiusPx, strength: b.strength, falloff: b.falloff ?? d.falloff, hardness: b.hardness ?? d.hardness, autosmooth: b.autosmooth ?? d.autosmooth, accumulate: b.accumulate ?? d.accumulate, invert: b.invert ?? d.invert },
     };
   },
 

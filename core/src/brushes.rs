@@ -188,6 +188,28 @@ pub struct Brush {
     pub autosmooth: f32,
     /// Sample the current surface (true) or the stroke-start surface (false) (STK-11).
     pub accumulate: bool,
+    /// The opposite effect (Draw carves, Inflate deflates, Clay digs, Crease raises, Pinch
+    /// pushes apart, Layer goes down, Fill and Scrape swap); other tools ignore it.
+    pub invert: bool,
+    /// Stabilizer (STK-3): lazy radius in screen pixels, and input smoothing 0..0.95.
+    pub lazy_px: f32,
+    pub stabilize: f32,
+}
+
+/// Hold buttons (NAV-5): while held when a stroke starts, the stroke smooths (with the Smooth
+/// tool's strength) or inverts. Read once at stroke start, so letting go mid-stroke changes nothing.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Modifiers {
+    pub smooth: bool,
+    pub invert: bool,
+    pub smooth_strength: f32,
+}
+
+impl Tool {
+    /// Whether Invert means something for this tool (the UI hides it otherwise).
+    pub fn invertible(self) -> bool {
+        matches!(self, Tool::Draw | Tool::Inflate | Tool::Clay | Tool::Crease | Tool::Pinch | Tool::Layer | Tool::Fill | Tool::Scrape)
+    }
 }
 
 impl Default for Brush {
@@ -208,6 +230,9 @@ impl Default for Brush {
             hardness: 0.0,
             autosmooth: 0.0,
             accumulate: true,
+            invert: false,
+            lazy_px: 0.0,
+            stabilize: 0.0,
         }
     }
 }
@@ -824,7 +849,7 @@ impl Engine {
             if let Some(h) = layer_cap {
                 let n = self.orig_n.get(&self.mesh, &self.tx, v);
                 let above = dot(sub(p, o), n);
-                if above > h {
+                if (h > 0.0 && above > h) || (h < 0.0 && above < h) {
                     p = sub(p, scale(n, above - h));
                 }
             }
@@ -840,14 +865,21 @@ impl Engine {
     pub(crate) fn dab(&mut self, tool: Tool, c: [f32; 3], r: f32, s: f32, hit_n: [f32; 3]) {
         let original = self.samples_original(tool);
         let fallback = Plane { point: c, normal: hit_n };
+        // Invert is fixed per stroke (brush setting XOR the held Invert button).
+        let sign = if self.stroke.invert && tool.invertible() { -1.0 } else { 1.0 };
+        let tool = match (tool, sign < 0.0) {
+            (Tool::Fill, true) => Tool::Scrape,
+            (Tool::Scrape, true) => Tool::Fill,
+            _ => tool,
+        };
         match tool {
             Tool::Draw => {
                 let pl = self.sample_plane(c, r, original, fallback);
-                self.deform(c, r, s, original, Prim::Offset { n: pl.normal, amp: r * DRAW_K });
+                self.deform(c, r, s, original, Prim::Offset { n: pl.normal, amp: sign * r * DRAW_K });
             }
             Tool::Smooth => self.smooth_dab(c, r, s, self.brush.preserve_volume),
             Tool::Grab | Tool::SnakeHook => {} // stroke methods of their own
-            Tool::Inflate => self.deform(c, r, s, original, Prim::Inflate { amp: r * INFLATE_K }),
+            Tool::Inflate => self.deform(c, r, s, original, Prim::Inflate { amp: sign * r * INFLATE_K }),
             Tool::Flatten | Tool::Fill | Tool::Scrape | Tool::Planar => {
                 let pl = match self.stroke.brush.plane {
                     Some(pl) if tool == Tool::Planar => pl,
@@ -866,7 +898,7 @@ impl Engine {
             }
             Tool::Clay => {
                 let pl = self.sample_plane(c, r, original, fallback);
-                let q = add(pl.point, scale(pl.normal, CLAY_OFFSET * r));
+                let q = add(pl.point, scale(pl.normal, sign * CLAY_OFFSET * r)); // inverted: digs
                 let inf = f32::INFINITY;
                 self.deform(c, r, s, original, Prim::Plane { q, n: pl.normal, above: inf, below: inf, gain: CLAY_K });
             }
@@ -887,18 +919,19 @@ impl Engine {
                 let t = self.stroke.brush.prev.map(|p| normalize(tangential(sub(c, p), pl.normal))).unwrap_or([0.0; 3]);
                 let line = t != [0.0; 3];
                 let b = if line { normalize(cross(pl.normal, t)) } else { [0.0; 3] };
-                let n_in = scale(pl.normal, -1.0);
+                // Inverted the crease raises a ridge; it still pinches toward the line.
+                let n_in = scale(pl.normal, -sign);
                 self.deform(c, r, s, original, Prim::Crease { c, n_in, amp: r * CREASE_K, b, line, k: CREASE_PINCH });
             }
             Tool::Pinch => {
                 let pl = self.sample_plane(c, r, original, fallback);
-                self.deform(c, r, s, original, Prim::Pinch { c, n: pl.normal, k: PINCH_K });
+                self.deform(c, r, s, original, Prim::Pinch { c, n: pl.normal, k: sign * PINCH_K });
             }
             Tool::Layer => {
                 if self.stroke.brush.layer_h <= 0.0 {
                     self.stroke.brush.layer_h = LAYER_HEIGHT * r;
                 }
-                self.deform(c, r, s, original, Prim::Layer { h: self.stroke.brush.layer_h });
+                self.deform(c, r, s, original, Prim::Layer { h: sign * self.stroke.brush.layer_h });
             }
         }
         self.stroke.brush.prev = Some(c);
@@ -1921,6 +1954,235 @@ mod tests {
             apply_record(&mut e.mesh, &record).unwrap();
             assert_eq!(e.mesh.position_hash(), h1, "{tool:?}: journal replay");
         }
+    }
+
+    // ---------- Invert, hold buttons (NAV-5), stabilizer (STK-3) ----------
+
+    /// Inverted brushes on the reference plane: exact mirror images of their golden profiles.
+    #[test]
+    fn brs1_brs4_brs6_brs8_brs10_inverted_brushes_golden_on_the_plane() {
+        let (c, r) = ([0.05f32, -0.05, 0.0], 0.3f32);
+        let mut report = Vec::new();
+        for (tool, peak) in [(Tool::Draw, r * DRAW_K), (Tool::Inflate, r * INFLATE_K), (Tool::Clay, CLAY_OFFSET * r * CLAY_K)] {
+            let mut e = plane(128);
+            let before = e.mesh.positions.clone();
+            begin(&mut e, tool);
+            e.stroke.invert = true;
+            e.dab(tool, c, r, 1.0, [0.0, 0.0, 1.0]);
+            let mut worst = 0.0f32;
+            for v in 0..e.mesh.nverts() {
+                let p0 = get3(&before, v);
+                let want = -peak * factor(Falloff::Smooth, 0.0, len_sq(sub(p0, c)).sqrt() / r);
+                worst = worst.max((e.mesh.positions[3 * v + 2] - p0[2] - want).abs());
+            }
+            report.push(format!("{tool:?} {:.1e}", worst / peak));
+            assert!(worst / peak < 1e-5, "{tool:?} inverted profile off by {}", worst / peak);
+        }
+        // Pinch inverted pushes apart, still without any normal motion on a plane.
+        let mut e = plane(128);
+        let before = e.mesh.positions.clone();
+        begin(&mut e, Tool::Pinch);
+        e.stroke.invert = true;
+        e.dab(Tool::Pinch, c, r, 1.0, [0.0, 0.0, 1.0]);
+        let (mut outward, mut moved, mut dz) = (true, 0, 0.0f32);
+        for v in 0..e.mesh.nverts() {
+            let (a, b) = (get3(&before, v), get3(&e.mesh.positions, v));
+            if a != b {
+                moved += 1;
+                outward &= dot(sub(b, a), sub(a, c)) > 0.0;
+                dz = dz.max((b[2] - a[2]).abs());
+            }
+        }
+        assert!(moved > 100 && outward && dz == 0.0);
+        // Layer inverted goes down by exactly its height, never further.
+        let mut e = plane(128);
+        e.brush.tool = Tool::Layer;
+        e.brush.strength = 1.0;
+        e.brush.invert = true;
+        let first = e.raycast_screen(300.0, 400.0).unwrap();
+        let h = LAYER_HEIGHT * e.cam.world_radius(e.radius_px_at(1.0), first.point);
+        let mut path = Vec::new();
+        for k in 0..20 {
+            path.extend(if k % 2 == 0 { line([300.0, 400.0], [500.0, 400.0], 40) } else { line([500.0, 400.0], [300.0, 400.0], 40) });
+        }
+        stroke(&mut e, &path);
+        let low = e.mesh.positions.chunks(3).map(|p| p[2]).fold(f32::MAX, f32::min);
+        report.push(format!("Pinch outward {moved} verts, |dz| {dz}; Layer down min {:.6} H", low / h));
+        assert!(low >= -h * (1.0 + 1e-5) && low < -0.99 * h);
+        println!("inverted golden (error / peak): {}", report.join("; "));
+    }
+
+    /// Fill and Scrape are one primitive: inverting one gives exactly the other; an inverted
+    /// Crease raises a ridge and still pulls toward the line.
+    #[test]
+    fn brs11_brs7_invert_swaps_fill_and_scrape_and_raises_a_crease() {
+        let bumpy = || {
+            let mut e = plane(128);
+            for v in 0..e.mesh.nverts() {
+                let p = get3(&e.mesh.positions, v);
+                e.mesh.positions[3 * v + 2] = 0.02 * (6.0 * p[0]).sin() * (6.0 * p[1]).sin();
+            }
+            for v in 0..e.mesh.nverts() {
+                e.mesh.vertex_normal(v);
+            }
+            e
+        };
+        let run = |tool: Tool, invert: bool| {
+            let mut e = bumpy();
+            begin(&mut e, tool);
+            e.stroke.invert = invert;
+            e.dab(tool, [0.05, 0.02, 0.0], 0.4, 1.0, [0.0, 0.0, 1.0]);
+            e.mesh.position_hash()
+        };
+        assert_eq!(run(Tool::Fill, true), run(Tool::Scrape, false));
+        assert_eq!(run(Tool::Scrape, true), run(Tool::Fill, false));
+        assert_ne!(run(Tool::Fill, false), run(Tool::Scrape, false));
+        let mut e = plane(256);
+        let before = e.mesh.positions.clone();
+        e.brush.tool = Tool::Crease;
+        e.brush.strength = 1.0;
+        e.brush.falloff = Falloff::Sharp;
+        e.brush.invert = true;
+        stroke(&mut e, &line([250.0, 400.0], [550.0, 400.0], 60));
+        let v = nearest(&e.mesh, [0.0, 0.0, 0.0]);
+        let ridge = e.mesh.positions[3 * v + 2] / e.last_dab[6];
+        let side = nearest(&e.mesh, [0.0, 0.05, 0.0]);
+        let pulled = e.mesh.positions[3 * side + 1] - before[3 * side + 1];
+        println!("brs7 inverted crease: ridge height {ridge:.4} r; a row 0.05 off the line moved {pulled:.2e} toward it");
+        assert!(ridge > 0.1 && pulled < 0.0);
+    }
+
+    #[test]
+    fn sym1_und1_brs1_brs4_brs6_brs7_brs8_brs10_brs11_inverted_strokes_mirror_exact_and_undo_exact() {
+        let base = sphere(48);
+        let maps: Vec<(u8, Vec<usize>)> = [1u8, 2, 4].iter().map(|&a| (a, partners(&base.mesh, a))).collect();
+        let mut report = Vec::new();
+        for tool in Tool::ALL.into_iter().filter(|t| t.invertible()) {
+            let mut e = sphere(48);
+            e.brush.tool = tool;
+            e.brush.strength = 1.0;
+            e.brush.invert = true;
+            (e.brush.symmetry_x, e.brush.symmetry_y, e.brush.symmetry_z) = (true, true, true);
+            let h0 = e.mesh.position_hash();
+            stroke(&mut e, &sphere_stroke(tool));
+            let h1 = e.mesh.position_hash();
+            let err = mirror_error(&e.mesh, &maps);
+            assert!(h1 != h0 && err < 1e-6, "{tool:?}: mirror error {err}");
+            assert!(e.undo() > 0);
+            assert_eq!(e.mesh.position_hash(), h0, "{tool:?}: undo");
+            assert!(e.redo() > 0);
+            assert_eq!(e.mesh.position_hash(), h1, "{tool:?}: redo");
+            report.push(format!("{tool:?} {err:.1e}"));
+        }
+        println!("inverted, XYZ mirror error (undo/redo exact): {}", report.join(", "));
+    }
+
+    /// Hold buttons (NAV-5): held when the stroke starts, Smooth turns it into a Smooth stroke at
+    /// the Smooth tool's strength and Invert flips it; letting go mid-stroke changes nothing.
+    #[test]
+    fn nav5_held_smooth_and_invert_apply_to_the_whole_stroke() {
+        let path = line([330.0, 380.0], [470.0, 430.0], 40);
+        let run = |tool: Tool, strength: f32, invert: bool, m: Modifiers, release_midway: bool| {
+            let mut e = sphere(48);
+            e.brush.tool = tool;
+            e.brush.strength = strength;
+            e.brush.invert = invert;
+            e.modifiers = m;
+            assert!(e.stroke_begin(path[0][0], path[0][1], 1.0));
+            let rest: Vec<f32> = path[1..].iter().flat_map(|p| [p[0], p[1], 1.0]).collect();
+            let half = 3 * (rest.len() / 6);
+            e.stroke_move(&rest[..half]);
+            if release_midway {
+                e.modifiers = Modifiers::default();
+            }
+            e.stroke_move(&rest[half..]);
+            e.stroke_end();
+            e.mesh.position_hash()
+        };
+        let none = Modifiers::default();
+        let smooth = Modifiers { smooth: true, invert: false, smooth_strength: 0.7 };
+        let invert = Modifiers { smooth: false, invert: true, smooth_strength: 0.7 };
+        assert_eq!(run(Tool::Draw, 0.5, false, smooth, false), run(Tool::Smooth, 0.7, false, none, false));
+        assert_eq!(run(Tool::Draw, 0.5, false, smooth, true), run(Tool::Smooth, 0.7, false, none, false));
+        assert_eq!(run(Tool::Draw, 0.5, false, invert, true), run(Tool::Draw, 0.5, true, none, false));
+        assert_eq!(run(Tool::Draw, 0.5, true, invert, false), run(Tool::Draw, 0.5, false, none, false));
+        assert_ne!(run(Tool::Draw, 0.5, false, none, false), run(Tool::Draw, 0.5, true, none, false));
+    }
+
+    /// A noisy line like a recorded Pencil trace: 2 px steps, +-2.5 px of seeded jitter across the
+    /// line, coordinates rounded to whole pixels (Safari before 26.2).
+    fn noisy_line() -> (Vec<[f32; 2]>, [f32; 2], [f32; 2]) {
+        let (a, b) = ([100.0f32, 400.0], [700.0f32, 460.0]);
+        let l = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
+        let nrm = [-(b[1] - a[1]) / l, (b[0] - a[0]) / l];
+        let mut seed = 2024u32;
+        let pts = (0..=300)
+            .map(|i| {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                let j = (seed as f32 / u32::MAX as f32 - 0.5) * 5.0;
+                let t = i as f32 / 300.0;
+                [(a[0] + (b[0] - a[0]) * t + nrm[0] * j).round(), (a[1] + (b[1] - a[1]) * t + nrm[1] * j).round()]
+            })
+            .collect();
+        (pts, a, nrm)
+    }
+
+    #[test]
+    fn stk3_stabilizer_cuts_jitter_by_70_percent_and_catches_up_on_lift() {
+        use crate::engine::Stabilizer;
+        let (raw, a, nrm) = noisy_line();
+        // Jitter RMS = distance across the true line, over the path resampled every 4 px (what
+        // the dabs follow), on the middle 80% of the line: the stroke starts exactly at the
+        // (jittered) touch-down point, and the filter takes about one lazy radius to forget it;
+        // that start transient is not jitter.
+        let dir = [nrm[1], -nrm[0]];
+        let rms = |path: &[[f32; 2]]| -> f64 {
+            let (mut sum, mut n, mut carry) = (0.0f64, 0, 0.0f32);
+            for w in path.windows(2) {
+                let d = [w[1][0] - w[0][0], w[1][1] - w[0][1]];
+                let seg = (d[0] * d[0] + d[1] * d[1]).sqrt();
+                let mut t = 4.0 - carry;
+                while t <= seg {
+                    let q = [w[0][0] + d[0] * t / seg, w[0][1] + d[1] * t / seg];
+                    let along = ((q[0] - a[0]) * dir[0] + (q[1] - a[1]) * dir[1]) / 603.0;
+                    if (0.1..=0.9).contains(&along) {
+                        let off = (q[0] - a[0]) * nrm[0] + (q[1] - a[1]) * nrm[1];
+                        sum += (off as f64).powi(2);
+                        n += 1;
+                    }
+                    t += 4.0;
+                }
+                carry = (carry + seg) % 4.0;
+            }
+            (sum / n as f64).sqrt()
+        };
+        let mut report = Vec::new();
+        let r0 = rms(&raw);
+        for (lazy, smooth) in [(0.0f32, 0.5f32), (12.0, 0.0), (12.0, 0.5), (24.0, 0.5), (30.0, 0.5)] {
+            let mut st = Stabilizer::new(lazy, smooth, raw[0][0], raw[0][1]);
+            let out: Vec<[f32; 2]> = raw.iter().map(|p| st.feed(p[0], p[1])).collect();
+            let r1 = rms(&out);
+            report.push(format!("lazy {lazy} px + smoothing {smooth}: {r1:.3} px (-{:.0}%)", 100.0 * (1.0 - r1 / r0)));
+            if (lazy, smooth) == (30.0, 0.5) {
+                assert!(1.0 - r1 / r0 >= 0.70, "jitter only -{:.0}%", 100.0 * (1.0 - r1 / r0));
+            }
+        }
+        // Off: an exact pass-through.
+        let mut st = Stabilizer::new(0.0, 0.0, raw[0][0], raw[0][1]);
+        assert!(raw.iter().all(|p| st.feed(p[0], p[1]) == *p));
+        // On the surface: the trailing stroke catches up to the lift point.
+        let mut e = plane(128);
+        e.brush.tool = Tool::Draw;
+        e.brush.lazy_px = 12.0;
+        e.brush.stabilize = 0.5;
+        stroke(&mut e, &raw);
+        let end = e.raycast_screen(raw[300][0], raw[300][1]).unwrap().point;
+        let px = e.cam.world_radius(1.0, end);
+        let gap = len_sq(sub([e.last_dab[0], e.last_dab[1], e.last_dab[2]], end)).sqrt() / px;
+        println!("stk3 jitter RMS across the line: raw {r0:.3} px; {}; last dab {gap:.1} px from the lift point (lazy radius 12 px)", report.join("; "));
+        assert!(gap <= e.brush.spacing * e.brush.radius_px + 0.5, "the stroke did not catch up: {gap} px short");
     }
 
     /// Native ms per dab on the reference mesh size (1M vertices), 200 dabs per brush:
