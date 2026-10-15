@@ -73,6 +73,11 @@ async function swStatus(page: Page): Promise<any> {
       }),
   );
 }
+/** The first-run gesture card (NAV-10) sits over the viewport until it is acknowledged. */
+async function dismissCards(page: Page): Promise<void> {
+  const got = page.getByRole('button', { name: 'Got it' });
+  if (await got.isVisible().catch(() => false)) await got.click();
+}
 async function stroke(page: Page, dx = 0): Promise<void> {
   const box = (await page.locator('#scene').boundingBox())!;
   const cx = box.x + box.width / 2 + dx;
@@ -83,9 +88,17 @@ async function stroke(page: Page, dx = 0): Promise<void> {
   await page.mouse.up();
 }
 async function strokeSaved(page: Page, dx = 0): Promise<void> {
-  const before = await page.evaluate(() => (window as any).__maquette.ui.saved.value?.seq ?? 0);
+  // Per project: a new project restarts its sequence, so compare with this project's own stats.
+  const before = await page.evaluate(() => (window as any).__maquette.ui.stats.value?.seq ?? 0);
   await stroke(page, dx);
-  await page.waitForFunction((s) => ((window as any).__maquette.ui.saved.value?.seq ?? 0) > s, before, { timeout: 20_000 });
+  await page.waitForFunction(
+    (s) => {
+      const st = (window as any).__maquette.ui.stats.value;
+      return !!st && st.seq > s && st.lastAcked >= st.seq;
+    },
+    before,
+    { timeout: 20_000 },
+  );
 }
 
 test('PLT-3: the installed P1a app (gh-pages) updates into version folders, works offline and keeps every project', async () => {
@@ -107,6 +120,7 @@ test('PLT-3: the installed P1a app (gh-pages) updates into version folders, work
     await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 30_000 });
     expect((await swStatus(page)).verified).toBe(true);
     // Two projects, each sculpted and saved (P1a's New replaces the open project with a new one).
+    await dismissCards(page);
     await strokeSaved(page);
     const hA = await hash(page);
     await page.evaluate(() => (window as any).__maquette.send({ type: 'new-sphere', n: 64 }));
@@ -288,6 +302,71 @@ test('PLT-3: v1 -> v2 -> broken v3: updates apply on a cold launch, two failed b
     expect(await scriptSrc(page)).toContain(`/v/${v2.id}/`);
     record({ updates: { v1: v1.id, v2: v2.id, v3: v3.id, reverted: st.reverted, bad: st.bad } });
     console.log(JSON.stringify({ timings }, null, 1));
+  } finally {
+    await ctx.close();
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(work, { recursive: true, force: true });
+    rmSync(tree, { recursive: true, force: true });
+  }
+  expect(errors).toEqual([]);
+});
+
+test('PLT-3: a broken first release over the installed app goes back to the installed version after two failed boots, offline too', async () => {
+  const tree = join(DEPLOY, 'plt3r');
+  const base = `${ORIGIN}/maquette/plt3r/`;
+  rmSync(tree, { recursive: true, force: true });
+  mkdirSync(tree, { recursive: true });
+  execSync(`git archive gh-pages | tar -x -C "${tree}"`);
+  rmSync(join(tree, 'dev'), { recursive: true, force: true });
+  const legacy = JSON.parse(readFileSync(join(tree, 'precache.json'), 'utf8')).version as string;
+  const work = mkdtempSync(join(tmpdir(), 'maquette-plt3r-build-'));
+  const broken = join(work, 'broken');
+  cpSync('dist/app-prod', broken, { recursive: true });
+  const main = /src="\.\/(assets\/index-[^"]+\.js)"/.exec(readFileSync(join(broken, 'index.html'), 'utf8'))![1];
+  writeFileSync(join(broken, main), "throw new Error('broken first release');\n");
+  restamp(broken);
+  const profile = mkdtempSync(join(tmpdir(), 'maquette-plt3r-'));
+  const ctx = await webkit.launchPersistentContext(profile, { viewport: { width: 1180, height: 820 } });
+  const errors: string[] = [];
+  try {
+    await clearProjects(ctx);
+    let page = await launch(ctx, base, errors);
+    await ready(page);
+    await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 30_000 });
+    await dismissCards(page);
+    await strokeSaved(page);
+    const h = await hash(page);
+    await closeAll(ctx);
+    const rel = assembleProd({ dist: broken, root: tree });
+    page = await launch(ctx, base, errors);
+    await ready(page);
+    await page.waitForFunction(async () => !!(await navigator.serviceWorker.getRegistration())?.waiting, null, { timeout: 60_000, polling: 200 });
+    await closeAll(ctx);
+    await settleWorker(ctx, base);
+    for (const n of [1, 2]) {
+      const errs: string[] = [];
+      page = await launch(ctx, base, errs);
+      await page.waitForTimeout(2500);
+      expect(await scriptSrc(page)).toContain(`/v/${rel.version}/`);
+      expect(errs.join(' ')).toContain('broken first release');
+      await closeAll(ctx);
+    }
+    const t = Date.now();
+    page = await launch(ctx, base, errors);
+    await ready(page);
+    timings.revertToInstalledMs = Date.now() - t;
+    expect(await scriptSrc(page)).not.toContain('/v/');
+    expect(await hash(page)).toBe(h);
+    const st = await swStatus(page);
+    expect([st.version, st.layout, st.bad]).toEqual([legacy, 'p1a', [rel.version]]);
+    await ctx.setOffline(true);
+    await closeAll(ctx);
+    page = await launch(ctx, base, errors);
+    await ready(page);
+    expect(await scriptSrc(page)).not.toContain('/v/');
+    expect(await hash(page)).toBe(h);
+    await ctx.setOffline(false);
+    record({ revertToInstalled: { legacy, broken: rel.version } });
   } finally {
     await ctx.close();
     rmSync(profile, { recursive: true, force: true });
