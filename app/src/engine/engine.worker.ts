@@ -17,6 +17,7 @@ import {
   type ToPersist,
   type RemeshCmd,
   type RemeshEstimate,
+  type DetailMode,
   type ImportReport,
   type Units,
   UNITS,
@@ -112,8 +113,7 @@ function frame(): void {
     renderer.init();
     renderer.uploadAll(core);
   }
-  const n = core.x.eng_frame_update();
-  renderer.applyUpdates(core, n);
+  applyFrameUpdate();
   renderer.draw(cam, ring());
   const mb = (core.mem().byteLength + renderer.gpuBytes) / 2 ** 20;
   highWaterMB = Math.max(highWaterMB, mb);
@@ -246,7 +246,17 @@ function scheduleCheckpoint(): void {
  *  the state after a journaled record. */
 async function checkpoint(): Promise<void> {
   if (!storageOk || ckptInFlight || strokeActive || loading || replacing) return;
-  core.x.eng_frame_update(); // flush dirty flags from the last stroke into the checkpoint set
+  applyFrameUpdate(); // flush dirty flags from the last stroke into the checkpoint set
+  if (core.x.eng_topo_dirty()) {
+    // TOP-3: triangles changed since the files were written whole; topo.bin has no in-place
+    // ranges (its CRC covers the file), so the checkpoint is a whole save (replace-mesh).
+    const topo = core.out(core.x.eng_topo_bytes());
+    const positions = new Uint8Array(core.mem(), core.x.eng_positions_ptr(), core.x.eng_positions_bytes()).slice().buffer;
+    core.x.eng_topo_saved();
+    core.x.eng_checkpoint_collect(); // the whole save covers every dirty range
+    await saveReplace(topo, positions);
+    return;
+  }
   const n = core.x.eng_checkpoint_collect();
   if (n === 0) return;
   const r = core.u32s(core.x.eng_ckpt_ptr(), n * 3).slice();
@@ -345,6 +355,7 @@ async function createProjectFromEngine(name: string, u: Units): Promise<void> {
   }
   frameView(true);
   saveStateNow();
+  dynApply(false); // TOP-3: a new mesh starts without slack; the next dyntopo stroke lays it out
   renderer.uploadAll(core);
   requestFrame();
   post({ type: 'units', units });
@@ -491,6 +502,7 @@ function loadProject(r: OpenResult, unclean: boolean): RecoveryInfo {
     } catch {}
   }
   if (!restoredCamera) frameView(true);
+  if (renderer) dynApply(false); // TOP-3: a dyntopo layout reopens ready
   return { project: r.name ?? 'Sculpt', records, stoppedAt, lastSeq, uncleanExit: unclean };
 }
 
@@ -739,6 +751,7 @@ scope.onmessage = async (e: MessageEvent<ToEngine>) => {
       break;
     case 'stroke-begin':
       if (remeshRunning || editBlocked()) break; // the mesh is frozen while a remesh runs
+      if (dyn.on && !dynReady()) dynApply(true); // e.g. after undoing a relayout
       commitCamera();
       strokeActive = true;
       core.x.eng_stroke_begin(m.x * dpr, m.y * dpr, m.p);
@@ -763,6 +776,7 @@ scope.onmessage = async (e: MessageEvent<ToEngine>) => {
       strokeActive = false;
       if (len > 0) core.x.eng_heavy_edit();
       journal(len);
+      if (dyn.on) dynAfterStroke();
       requestFrame();
       break;
     }
@@ -884,6 +898,12 @@ scope.onmessage = async (e: MessageEvent<ToEngine>) => {
       break;
     case 'remesh':
       remeshCmd(m.cmd);
+      break;
+    case 'dyntopo':
+      if (strokeActive || remeshRunning) break;
+      dyn = { on: m.on, mode: m.mode, value: m.value };
+      dynApply(m.on);
+      requestFrame();
       break;
   }
 };
@@ -1013,12 +1033,71 @@ function topologyInstalled(topoLen: number): void {
   const topo = new Uint8Array(core.mem(), core.x.eng_heavy_topo_ptr(), topoLen).slice().buffer;
   core.x.eng_heavy_topo_release();
   const positions = new Uint8Array(core.mem(), core.x.eng_positions_ptr(), core.x.eng_positions_bytes()).slice().buffer;
+  dynApply(false); // a fresh engine: dyntopo settings again (small GPU pages if ready)
   renderer.uploadAll(core);
   setBrush(brush);
   commitCamera();
   requestFrame();
   postStats(true);
   void saveReplace(topo, positions);
+}
+
+// ---------- TOP-3 dyntopo: settings, layout with slack, status ----------
+let dyn: { on: boolean; mode: DetailMode; value: number } = { on: false, mode: 1, value: 12 };
+const DYN_SLACK = 2.0;
+
+/** Engine frame: GPU commands, or a full re-upload when the page layout changed. */
+function applyFrameUpdate(): void {
+  const n = core.x.eng_frame_update();
+  if (core.x.eng_gpu_page_count() !== renderer.pageCount) renderer.uploadAll(core);
+  else renderer.applyUpdates(core, n);
+}
+
+function dynStatusRaw(): Uint32Array {
+  const p = core.x.mq_alloc(40);
+  core.x.eng_dyn_status(p);
+  const s = core.u32s(p, 10).slice();
+  core.x.mq_free(p, 40);
+  return s;
+}
+
+function dynReady(): boolean {
+  return dynStatusRaw()[1] === 1;
+}
+
+function dynPost(): void {
+  const s = dynStatusRaw();
+  post({ type: 'dyntopo', status: { on: s[0] === 1, ready: s[1] === 1, capped: s[3] === 1, liveTris: s[6], splits: s[4], collapses: s[5] } });
+}
+
+/** Pushes the settings into the engine; lays the mesh out with slack when allowed and needed. */
+function dynApply(allowRelayout: boolean): void {
+  const r = core.x.eng_dyn_set(dyn.on ? 1 : 0, dyn.mode, dyn.value);
+  if (r === 3) renderer.uploadAll(core);
+  if (r === 2 && allowRelayout) dynRelayout();
+  dynPost();
+}
+
+/** Re-lays the mesh out with slack (an undoable heavy op, saved whole), within the budget:
+ *  full slack, else a little, else detail stays capped where the slack ran out. */
+function dynRelayout(): boolean {
+  for (const slack of [DYN_SLACK, 1.25]) {
+    const pre = fits(steadyMB(), core.x.eng_dyn_layout_bytes(slack) / 2 ** 20, 'More dyntopo detail');
+    if (!pre.ok) continue;
+    const len = core.x.eng_dyn_relayout(slack, LEAF);
+    if (!len) return false;
+    topologyInstalled(len); // GPU, brush, camera, dyntopo settings, whole save
+    core.x.eng_dyn_flags(1, 0);
+    return true;
+  }
+  core.x.eng_dyn_flags(1, 1); // detail capped: the layout keeps what it has
+  return false;
+}
+
+/** A stroke that ran out of slack gets a new layout before the next one. */
+function dynAfterStroke(): void {
+  if (dynStatusRaw()[2] === 1) dynRelayout();
+  dynPost();
 }
 
 /** Saves a whole new mesh. Waits out a running checkpoint and blocks new ones until done; the

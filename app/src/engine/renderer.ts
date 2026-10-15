@@ -183,10 +183,31 @@ export class Renderer {
     for (let c = 0; c < ncmds; c++) {
       const o = c * CMD_WORDS;
       const page = this.pages[cmds[o + 1]];
-      if (!page || cmds[o] !== 0) continue;
-      gl.bindBuffer(gl.ARRAY_BUFFER, page.vbo);
-      gl.bufferSubData(gl.ARRAY_BUFFER, cmds[o + 2], new Uint8Array(mem, arena + cmds[o + 3], cmds[o + 4]));
+      if (!page) continue;
+      const data = new Uint8Array(mem, arena + cmds[o + 3], cmds[o + 4]);
+      if (cmds[o] === 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, page.vbo);
+        gl.bufferSubData(gl.ARRAY_BUFFER, cmds[o + 2], data);
+      } else if (cmds[o] === 2) {
+        // TOP-3 dyntopo: the page's vertices replaced whole (its foreign section may have grown).
+        gl.bindBuffer(gl.ARRAY_BUFFER, page.vbo);
+        gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+        this.gpuBytes += data.byteLength - page.vbytes;
+        page.vbytes = data.byteLength;
+      } else if (cmds[o] === 3) {
+        // TOP-3 dyntopo: the page's triangles replaced whole (dead slots are degenerate).
+        gl.bindVertexArray(null);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, page.ibo);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+        this.gpuBytes += data.byteLength - page.indexCount * 4;
+        page.indexCount = data.byteLength / 4;
+      }
     }
+  }
+
+  /** Pages on the GPU now (the worker re-uploads everything when the engine's count differs). */
+  get pageCount(): number {
+    return this.pages.length;
   }
 
   draw(cam: Camera, ring: { center: number[]; normal: number[]; radius: number } | null): void {

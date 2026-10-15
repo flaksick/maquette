@@ -88,7 +88,19 @@ export type ToEngine =
   | { type: 'disk-retry' }
   // ---- PLT-8 device budgets ----
   | { type: 'budget'; budget: BudgetState }
-  | { type: 'remesh'; cmd: RemeshCmd };
+  | { type: 'remesh'; cmd: RemeshCmd }
+  | { type: 'dyntopo'; on: boolean; mode: DetailMode; value: number };
+
+/** TOP-3 dyntopo detail: 0 constant (resolution, edges per unit), 1 screen (pixels), 2 brush (% radius). */
+export type DetailMode = 0 | 1 | 2;
+export interface DyntopoStatus {
+  on: boolean;
+  ready: boolean;
+  capped: boolean;
+  liveTris: number;
+  splits: number;
+  collapses: number;
+}
 
 /** TOP-1 voxel remesh: one envelope each way (engine.worker.ts "TOP-1 remesh" block). */
 export type RemeshCmd =
@@ -141,7 +153,8 @@ export type FromEngine =
   | { type: 'disk'; full: boolean; unsaved: number }
   // ---- PLT-8 device budgets: the budget in force after session-start learning ----
   | { type: 'budget'; budget: BudgetState; change: BudgetChange | null; stress: StressResult | null }
-  | { type: 'remesh'; ev: RemeshEvent };
+  | { type: 'remesh'; ev: RemeshEvent }
+  | { type: 'dyntopo'; status: DyntopoStatus };
 
 export interface RecoveryInfo {
   project: string;

@@ -63,6 +63,14 @@ export interface Exports {
   eng_heavy_reset(): void;
   eng_heavy_depths(out: number): void;
   eng_validate(out: number): number;
+  // TOP-3 dyntopo (core/src/dyntopo/abi.rs)
+  eng_dyn_set(on: number, mode: number, value: number): number;
+  eng_dyn_layout_bytes(slack: number): number;
+  eng_dyn_relayout(slack: number, leafMax: number): number;
+  eng_dyn_status(out: number): void;
+  eng_dyn_flags(clearStarved: number, capped: number): void;
+  eng_topo_dirty(): number;
+  eng_topo_saved(): void;
   // [io] core/src/io/abi.rs (IMP-0/1/2, EXP-2)
   eng_import(ptr: number, len: number, hint: number, leafMax: number): number;
   eng_export_stl(scale: number, info: number): number;
