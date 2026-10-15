@@ -234,6 +234,7 @@ export class Renderer {
     const cmds = core.u32s(core.x.eng_gpu_cmds_ptr(), ncmds * CMD_WORDS);
     const arena = core.x.eng_gpu_arena_ptr();
     const mem = core.mem();
+    let staleEdges = false;
     for (let c = 0; c < ncmds; c++) {
       const o = c * CMD_WORDS;
       const page = this.pages[cmds[o + 1]];
@@ -255,8 +256,17 @@ export class Renderer {
         gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
         this.gpuBytes += data.byteLength - page.indexCount * 4;
         page.indexCount = data.byteLength / 4;
+        if (page.edges) {
+          // Its polygon edges changed too: rebuilt below if the overlay is on.
+          gl.deleteVertexArray(page.edges.vao);
+          gl.deleteBuffer(page.edges.ibo);
+          this.gpuBytes -= page.edges.count * 4;
+          page.edges = null;
+          staleEdges = true;
+        }
       }
     }
+    if (staleEdges && this.view.wireframe) this.buildEdges(core);
   }
 
   /** Pages on the GPU now (the worker re-uploads everything when the engine's count differs). */
