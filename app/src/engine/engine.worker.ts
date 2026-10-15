@@ -542,10 +542,10 @@ async function init(m: Extract<ToEngine, { type: 'init' }>): Promise<void> {
       recovered = loadTracked(opened, unclean);
     } catch (e) {
       post({ type: 'status', text: `Couldn't open the last project (${e}); started a new sphere.`, level: 'error' });
-      await createSphere(DEFAULT_SPHERE);
+      await createShape('sphere', DEFAULT_SPHERE);
     }
   } else {
-    await createSphere(DEFAULT_SPHERE);
+    await createShape('sphere', DEFAULT_SPHERE);
     recovered.project = 'New sphere';
   }
   if (pendingSize) {

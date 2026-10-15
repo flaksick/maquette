@@ -504,3 +504,13 @@ table.counts td:last-child {
 .budget p {
   margin: 4px 0;
 }
+/* ---------- PRM-2: shape picker in the New sheet ---------- */
+.shapes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0 4px;
+}
+.shapes button {
+  min-width: 84px;
+}
