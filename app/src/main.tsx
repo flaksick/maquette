@@ -146,10 +146,10 @@ function onEngine(m: FromEngine): void {
 }
 
 /** Test and diagnostics hook: current mesh hash and stats from the engine. */
-export function query(): Promise<Extract<FromEngine, { type: 'query-result' }>> {
+export function query(at?: { x: number; y: number }): Promise<Extract<FromEngine, { type: 'query-result' }>> {
   return new Promise((resolve) => {
     queryWaiters.push(resolve);
-    send({ type: 'query' });
+    send({ type: 'query', ...at });
   });
 }
 

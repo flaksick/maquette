@@ -14,6 +14,8 @@ export interface Exports {
   eng_load(topo: number, topoLen: number, pos: number, posLen: number): number;
   eng_set_brush(tool: number, radiusPx: number, strength: number, flags: number, gamma: number, spacing: number): void;
   eng_set_brush_ext(falloff: number, hardness: number, autosmooth: number, flags: number): void;
+  eng_set_stroke(lazyPx: number, smoothing: number): void;
+  eng_set_modifiers(flags: number, smoothStrength: number): void;
   eng_camera_commit(): void;
   eng_stroke_begin(x: number, y: number, p: number): number;
   eng_stroke_move(n: number): number;

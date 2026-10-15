@@ -33,6 +33,10 @@ export interface BrushState {
   hardness?: number;
   autosmooth?: number;
   accumulate?: boolean;
+  invert?: boolean;
+  /** Stabilizer (STK-3): lazy radius in CSS pixels and input smoothing 0..0.9. */
+  lazyPx?: number;
+  stabilize?: number;
 }
 
 export interface Stats {
@@ -70,6 +74,8 @@ export type ToEngine =
   | { type: 'resize'; width: number; height: number; dpr: number }
   | { type: 'brush'; brush: BrushState }
   | { type: 'view'; view: ViewState }
+  /** Hold buttons (NAV-5): read by the engine when the next stroke starts. */
+  | { type: 'modifiers'; smooth: boolean; invert: boolean; smoothStrength: number }
   | { type: 'stroke-begin'; x: number; y: number; p: number }
   | { type: 'stroke-move'; samples: Float32Array }
   | { type: 'stroke-end' }
@@ -91,7 +97,7 @@ export type ToEngine =
   | { type: 'visible' }
   | { type: 'hidden' }
   | { type: 'debug-trap' }
-  | { type: 'query' }
+  | { type: 'query'; x?: number; y?: number }
   // P1b projects (PRJ-1): load another project by id; PLT-11: retry records the disk refused.
   | { type: 'open-project'; id: string }
   // NAV-4: snap to a Blender axis view (animated); perspective or orthographic projection.
@@ -145,7 +151,7 @@ export type FromEngine =
   | { type: 'refused'; text: string }
   | { type: 'state'; brush?: BrushState }
   | { type: 'fatal'; error: string }
-  | { type: 'query-result'; hash: string; stats: Stats; storageOk: boolean }
+  | { type: 'query-result'; hash: string; stats: Stats; storageOk: boolean; hit?: number[] | null }
   // P1b: the open project (after launch, new, open; `error` = a switch failed and this one stayed
   // open). `brushRestored` = the brush came from the project's saved state (PRJ-10).
   | { type: 'project'; id: string; name: string; brush: BrushState; brushRestored: boolean; error?: string; view?: ViewState }
