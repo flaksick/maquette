@@ -1,5 +1,5 @@
 {
- "version": "f49affb442d3",
+ "version": "131380e1c4dd",
  "entry": "entry.html",
  "files": [
   {
@@ -8,34 +8,34 @@
    "sha256": "965eec3a3075b7c4430568fc1a75c9bf946776254088b2c998d3c163c17aad60"
   },
   {
-   "url": "assets/bench.worker-JN6nwnEr.js",
+   "url": "assets/bench.worker-DE1HYcxM.js",
    "bytes": 8643,
-   "sha256": "a4ac6a4cdb4e948f6e03ad489905a7ead7935fdf5f636878032d4bfa104638ab"
+   "sha256": "a38e882fdf64149ecdcc7f0ebb3d63f4b7a5b5d89fbd03d6e92cfbb0bafa6de4"
   },
   {
-   "url": "assets/core.scalar-BYlCqXH0.wasm",
-   "bytes": 406301,
-   "sha256": "817d1c04ac26776a84aeb63c4e19e5f872402bc7e4f73770fd924998a9d66dad"
+   "url": "assets/core.scalar-DPjkktkd.wasm",
+   "bytes": 476788,
+   "sha256": "b5f012224a494d32f9c76eb5652f22cb26db367d51e73451ed7cff1d11cd6855"
   },
   {
-   "url": "assets/core.simd-C-Nvzuh3.wasm",
-   "bytes": 408987,
-   "sha256": "7676e9fa136b5efaad256f8416cfc0e8f812e32ccabeaecc48fcbb1d95b2bbf4"
+   "url": "assets/core.simd-BVYMI9Pv.wasm",
+   "bytes": 479721,
+   "sha256": "e2cf77f3a4a38757d0c602915a4143202662e6795f3d250dbd9b9523facf1db4"
   },
   {
-   "url": "assets/engine.worker-B8Af80hH.js",
-   "bytes": 33431,
-   "sha256": "4ff9ba937ae87d45c331518afa82e67b3fd8678cefe3d1640608b9d318630433"
+   "url": "assets/engine.worker-z5dZv3Nc.js",
+   "bytes": 37374,
+   "sha256": "3b63e827dadcaf282a7b01bdc980366a854b3e7ce7f61f44b7137ff2ce024b60"
   },
   {
-   "url": "assets/index-CLk8A-OC.css",
-   "bytes": 7569,
-   "sha256": "db261a3729f7e00ccb098b818f09544f1cd5ae936c6926fe3414cd82e02db6f5"
+   "url": "assets/index-C2CJ5u74.js",
+   "bytes": 90512,
+   "sha256": "100d6fc0d304d9ef1eb179e6163d04f1649203fb496023a3f1a762c2ed85d08e"
   },
   {
-   "url": "assets/index-oRkjBT4g.js",
-   "bytes": 84626,
-   "sha256": "9628133b6c031cb120eafd6fd41496c2b736b53b56ed844dade63d68800e4f99"
+   "url": "assets/index-OBLqfQKc.css",
+   "bytes": 8094,
+   "sha256": "e1022e39d47912ed0fab7e08a961050349ddc5f47c20737384875ed9a52f758a"
   },
   {
    "url": "assets/persist.worker-BIIVJzrd.js",
@@ -50,7 +50,7 @@
   {
    "url": "entry.html",
    "bytes": 864,
-   "sha256": "f58397c4c451f7bd08f1b73f2294779628fe6ab050853bd74375e41b660b7b26"
+   "sha256": "b01d4da8d5ab97ae97a092669d89bcf17e0a89a5e4b58fd6928d6ad3fb57f41f"
   },
   {
    "url": "icons/app-180.png",
@@ -70,7 +70,7 @@
   {
    "url": "index.html",
    "bytes": 834,
-   "sha256": "310ec9acf4a98a06486607e4497c62aa9a9df6e5b1912ead947e30c7948403bb"
+   "sha256": "634602411254911d8427b93a7617b9c8398bbd8894c83164e8f46f9ee88b53c8"
   },
   {
    "url": "manifest.webmanifest",
