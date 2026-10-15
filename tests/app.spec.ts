@@ -201,3 +201,66 @@ test('PLT-13: storage unavailable is said out loud', async () => {
   await expect(page.getByText('Saved', { exact: true })).toHaveCount(0);
   await browser.close();
 });
+
+test('TOP-1 UND-1: remesh the sphere: closed, hash changes, undo restores it, survives a reload', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'maquette-remesh-'));
+  const ctx = await webkit.launchPersistentContext(profile, { viewport: { width: 1180, height: 820 } });
+  const errors: string[] = [];
+  let page = await ctx.newPage();
+  page.on('pageerror', (e) => errors.push(String(e)));
+  const rm = (p: Page) => p.evaluate(() => (globalThis as any).__maquetteRemesh.value);
+  const out: Record<string, unknown> = {};
+  try {
+    await page.goto(URL);
+    await ready(page);
+    // Start from (and end on) a fresh default sphere: WebKit keeps OPFS data across runs here, and
+    // the next run's tests expect the last project to be the 110,592-triangle sphere.
+    const fresh = async (p: Page) => {
+      await p.evaluate(() => (window as any).__maquette.send({ type: 'new-sphere', n: 96 }));
+      await p.waitForFunction(() => (window as any).__maquette.ui.stats.value?.tris === 110592 && (window as any).__maquette.ui.stats.value?.seq === 0, null, { timeout: 30_000 });
+    };
+    await fresh(page);
+    const before = await q(page);
+    await page.getByRole('button', { name: 'Remesh', exact: true }).click();
+    await expect(page.getByTestId('remesh-estimate')).toBeVisible({ timeout: 20_000 });
+    out.estimate = await page.getByTestId('remesh-estimate').textContent();
+    await page.getByRole('dialog', { name: 'Remesh' }).getByRole('button', { name: 'Remesh' }).click();
+    await page.waitForFunction(() => (globalThis as any).__maquetteRemesh.value.done !== null, null, { timeout: 120_000 });
+    const done = (await rm(page)).done;
+    out.done = done;
+    // Closed: the engine's validator on the installed mesh.
+    await page.evaluate(() => (window as any).__maquette.send({ type: 'remesh', cmd: { op: 'validate' } }));
+    await page.waitForFunction(() => (globalThis as any).__maquetteRemesh.value.validate !== null, null, { timeout: 30_000 });
+    const v = (await rm(page)).validate;
+    out.validate = v;
+    expect([v.boundaryEdges, v.nonManifoldEdges, v.inconsistentEdges, v.nonManifoldVerts]).toEqual([0, 0, 0, 0]);
+    const after = await q(page);
+    expect(after.hash).not.toBe(before.hash);
+    expect(after.stats.tris).toBe(done.tris);
+    expect(after.stats.tris).not.toBe(before.stats.tris);
+    await waitSaved(page, after.stats.seq);
+    // Undo restores the exact pre-remesh mesh; redo the remeshed one (each saved whole).
+    await page.getByRole('button', { name: /^Undo/ }).click();
+    await page.waitForFunction((h) => (window as any).__maquette.query().then((r: any) => r.hash === h), before.hash, { timeout: 30_000 });
+    const undone = await q(page);
+    expect(undone.stats.tris).toBe(before.stats.tris);
+    await waitSaved(page, undone.stats.seq);
+    await page.getByRole('button', { name: /^Redo/ }).click();
+    await page.waitForFunction((h) => (window as any).__maquette.query().then((r: any) => r.hash === h), after.hash, { timeout: 30_000 });
+    const redone = await q(page);
+    await waitSaved(page, redone.stats.seq);
+    // Survives a reload: the remeshed mesh comes back from storage.
+    page = await reopen(ctx, page);
+    page.on('pageerror', (e) => errors.push(String(e)));
+    const reloaded = await q(page);
+    out.reload = { hash: reloaded.hash === after.hash, tris: reloaded.stats.tris };
+    expect(reloaded.hash).toBe(after.hash);
+    expect(reloaded.stats.tris).toBe(done.tris);
+    await fresh(page);
+  } finally {
+    console.log(JSON.stringify({ remesh: out }, null, 1));
+    await ctx.close();
+    rmSync(profile, { recursive: true, force: true });
+  }
+  expect(errors).toEqual([]);
+});

@@ -337,9 +337,6 @@ pre.diag {
 .sheet.wide {
   width: min(880px, 94vw);
 }
-.warn-text {
-  color: #e5c07b;
-}
 button.danger {
   background: #6b2a24;
   border-color: var(--bad);
@@ -449,6 +446,10 @@ input.rename {
 }
 .gesture-card li {
   margin: 3px 0;
+}
+.top button {
+  white-space: nowrap;
+  padding: 8px 10px;
 }
 /* ---------- [io] import, units, export format (IMP-0/1, PRJ-9, EXP-2) ---------- */
 .hidden-input {

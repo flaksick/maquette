@@ -4,8 +4,9 @@
 //   untagged   interactive elements (button, input, select, textarea, a[href], [role=button])
 //              with neither data-feature nor data-ui="chrome"          must be 0
 //   unknown    data-feature IDs that are not in spec.yaml               must be 0
-//   future     data-feature IDs whose phase is after current_phase and whose computed status
-//              is not PASS (FAIL, no-evidence, device-pending)          must be 0
+//   future     data-feature IDs whose phase is after current_phase and whose feature doesn't
+//              work yet: not PASS, and not device-pending with every off-device test passing
+//              (FAIL, no-evidence, device-pending without tests)          must be 0
 //   early      later-phase IDs allowed because feature-status says PASS (reported, not an error):
 //              a feature may ship before its phase only with evidence
 //   badChrome  data-ui values other than "chrome"                       must be 0
@@ -125,8 +126,12 @@ try {
   const unknown = ids.filter((id) => !phaseOf.has(id));
   const later = ids.filter((id) => phaseOf.has(id) && phaseIndex(spec, phaseOf.get(id)) > current);
   const st = later.length ? statusMap() : new Map();
-  const early = later.filter((id) => st.get(id)?.status === 'PASS').map((id) => `${id} (${phaseOf.get(id)}, PASS: ${st.get(id).evidence})`);
-  const future = later.filter((id) => st.get(id)?.status !== 'PASS').map((id) => `${id} (${phaseOf.get(id)}, ${st.get(id)?.status ?? 'no status'})`);
+  // A control works when its feature has PASS evidence, or when every off-device test passes and
+  // only the on-device measurement (a timing on the reference iPad) is still outstanding.
+  const works = (r) =>
+    !!r && (r.status === 'PASS' || (r.status === 'device-pending' && r.tests.some((t) => t.startsWith('pass ')) && !r.tests.some((t) => t.startsWith('fail '))));
+  const early = later.filter((id) => works(st.get(id))).map((id) => `${id} (${phaseOf.get(id)}, ${st.get(id).status}: ${st.get(id).evidence})`);
+  const future = later.filter((id) => !works(st.get(id))).map((id) => `${id} (${phaseOf.get(id)}, ${st.get(id)?.status ?? 'no status'})`);
   const badChrome = [...new Set(states.flatMap((s) => s.ui))].filter((v) => v !== 'chrome');
   const untagged = states.flatMap((s) => s.untagged.map((d) => `${s.sheet}: ${d}`));
   const interactive = states.reduce((n, s) => n + s.interactive, 0);

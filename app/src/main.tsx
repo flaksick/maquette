@@ -9,8 +9,9 @@ import { SHEETS, ui } from './state';
 import { bus } from './bus';
 import { InputController } from './input';
 import { registerServiceWorker, reportBootOk, reverted } from './sw-client';
+import { onRemeshEvent } from './remesh';
 import { call, connectLibrary, onEngineMessage, openProject, refreshProjects, watchStorage } from './projects';
-import { loadPrefs, onProjectOpened, prefs, savePrefsNow, setPref } from './prefs';
+import { holdPresets, loadPrefs, onProjectOpened, prefs, savePrefsNow, setPref } from './prefs';
 import { io, ioMessage } from './io-ui';
 import { attachPersist, benchRun, budget, onBudget, runBench, startStressTest, stressRun } from './budget-client';
 import type { FromEngine, ToEngine } from './shared/protocol';
@@ -87,6 +88,7 @@ function restartEngine(error: string): void {
 
 function onEngine(m: FromEngine): void {
   onEngineMessage(m); // projects / storage / disk state (P1b)
+  if (m.type === 'ready') holdPresets(); // its restored brush is not a preset change (prefs.ts)
   ioMessage(m); // [io] import report, units, STL export details
   switch (m.type) {
     case 'project':
@@ -127,6 +129,9 @@ function onEngine(m: FromEngine): void {
       break;
     case 'query-result':
       queryWaiters.shift()?.(m);
+      break;
+    case 'remesh':
+      onRemeshEvent(m.ev);
       break;
     case 'budget':
       onBudget(m);

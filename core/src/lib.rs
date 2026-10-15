@@ -13,6 +13,7 @@ pub mod mat4;
 pub mod math;
 pub mod objio;
 pub mod mesh;
+pub mod remesh;
 pub mod simd;
 pub mod sphere;
 pub mod store;
