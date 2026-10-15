@@ -101,13 +101,25 @@ async function strokeSaved(page: Page, dx = 0): Promise<void> {
   );
 }
 
+/** The newest prod tree in the legacy flat layout (root precache.json): what an iPad that hasn't
+ *  launched since the versioned layout shipped still runs, so the migration must keep working for it. */
+function legacyProdCommit(): string {
+  for (const c of execSync('git rev-list gh-pages', { encoding: 'utf8' }).trim().split('\n')) {
+    try {
+      execSync(`git cat-file -e ${c}:precache.json`, { stdio: 'ignore' });
+      return c;
+    } catch {}
+  }
+  throw new Error('no legacy (flat-layout) prod tree on gh-pages');
+}
+
 test('PLT-3: the installed P1a app (gh-pages) updates into version folders, works offline and keeps every project', async () => {
   const tree = join(DEPLOY, 'plt3m');
   const base = `${ORIGIN}/maquette/plt3m/`;
   rmSync(tree, { recursive: true, force: true });
   mkdirSync(tree, { recursive: true });
-  // 1. Exactly what users have installed today: the deployed prod tree (local gh-pages branch).
-  execSync(`git archive gh-pages | tar -x -C "${tree}"`);
+  // 1. What an iPad still on the legacy layout runs: the newest flat-layout prod tree on gh-pages.
+  execSync(`git archive ${legacyProdCommit()} | tar -x -C "${tree}"`);
   rmSync(join(tree, 'dev'), { recursive: true, force: true });
   const legacy = JSON.parse(readFileSync(join(tree, 'precache.json'), 'utf8')).version as string;
   const profile = mkdtempSync(join(tmpdir(), 'maquette-plt3m-'));
@@ -316,7 +328,7 @@ test('PLT-3: a broken first release over the installed app goes back to the inst
   const base = `${ORIGIN}/maquette/plt3r/`;
   rmSync(tree, { recursive: true, force: true });
   mkdirSync(tree, { recursive: true });
-  execSync(`git archive gh-pages | tar -x -C "${tree}"`);
+  execSync(`git archive ${legacyProdCommit()} | tar -x -C "${tree}"`);
   rmSync(join(tree, 'dev'), { recursive: true, force: true });
   const legacy = JSON.parse(readFileSync(join(tree, 'precache.json'), 'utf8')).version as string;
   const work = mkdtempSync(join(tmpdir(), 'maquette-plt3r-build-'));
