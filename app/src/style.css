@@ -241,6 +241,20 @@ button.primary {
 .viewbtns button {
   background: var(--panel);
 }
+.viewbtns button.on {
+  background: var(--accent);
+}
+/* Smooth | Flat: two buttons joined into one segmented control. */
+.seg {
+  display: flex;
+}
+.seg button:first-child {
+  border-radius: 10px 0 0 10px;
+}
+.seg button:last-child {
+  border-radius: 0 10px 10px 0;
+  border-left: none;
+}
 .notice {
   position: absolute;
   left: 50%;

@@ -57,10 +57,17 @@ export interface CameraState {
 }
 
 /** Main -> engine. */
+/** How the mesh is drawn (PNT-6), saved with the project's view state (PRJ-10). */
+export interface ViewState {
+  shading: 'smooth' | 'flat';
+  wireframe: boolean;
+}
+
 export type ToEngine =
   | { type: 'init'; canvas: OffscreenCanvas; dpr: number; width: number; height: number; persist: MessagePort; channel: string; budgetMB: number }
   | { type: 'resize'; width: number; height: number; dpr: number }
   | { type: 'brush'; brush: BrushState }
+  | { type: 'view'; view: ViewState }
   | { type: 'stroke-begin'; x: number; y: number; p: number }
   | { type: 'stroke-move'; samples: Float32Array }
   | { type: 'stroke-end' }
@@ -120,7 +127,7 @@ export type RemeshEvent =
 
 /** Engine -> main. */
 export type FromEngine =
-  | { type: 'ready'; stats: Stats; recovered: RecoveryInfo; brush?: BrushState; simd: boolean }
+  | { type: 'ready'; stats: Stats; recovered: RecoveryInfo; brush?: BrushState; simd: boolean; view?: ViewState }
   | { type: 'stats'; stats: Stats }
   | { type: 'saved'; seq: number; latencyMs: number }
   | { type: 'status'; text: string; level: 'info' | 'warn' | 'error' }
@@ -136,7 +143,7 @@ export type FromEngine =
   | { type: 'query-result'; hash: string; stats: Stats; storageOk: boolean }
   // P1b: the open project (after launch, new, open; `error` = a switch failed and this one stayed
   // open). `brushRestored` = the brush came from the project's saved state (PRJ-10).
-  | { type: 'project'; id: string; name: string; brush: BrushState; brushRestored: boolean; error?: string }
+  | { type: 'project'; id: string; name: string; brush: BrushState; brushRestored: boolean; error?: string; view?: ViewState }
   // PLT-11: the disk refused journal records; edits are blocked until they are saved.
   | { type: 'disk'; full: boolean; unsaved: number }
   // ---- PLT-8 device budgets: the budget in force after session-start learning ----
