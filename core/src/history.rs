@@ -13,6 +13,9 @@ pub const HEADER_BYTES: usize = 24;
 pub const KIND_STROKE: u32 = 1;
 pub const KIND_UNDO: u32 = 2;
 pub const KIND_REDO: u32 = 3;
+/// Kind flag (TOP-3 dyntopo): each leaf also carries its whole triangle slab after its positions:
+/// [first triangle, triangle count], the triangles (u32 x 3), the polygon-run bits padded to 4.
+pub const KIND_TOPO: u32 = 0x100;
 
 const CRC_TABLE: [u32; 256] = {
     let mut t = [0u32; 256];
@@ -232,6 +235,9 @@ impl History {
 pub fn encode_record(out: &mut Vec<u8>, seq: u32, kind: u32, states: &LeafStates, mesh: &EditMesh) {
     out.clear();
     out.resize(HEADER_BYTES, 0);
+    let topo = states.is_topo();
+    let kind = if topo { kind | KIND_TOPO } else { kind };
+    let mut tat = 0usize;
     for (i, &leaf) in states.leaves.iter().enumerate() {
         let (a, b) = mesh.leaf_range(leaf as usize);
         out.extend_from_slice(&leaf.to_le_bytes());
@@ -239,6 +245,20 @@ pub fn encode_record(out: &mut Vec<u8>, seq: u32, kind: u32, states: &LeafStates
         out.extend_from_slice(&((b - a) as u32).to_le_bytes());
         for &x in &states.data[states.off[i] as usize..states.off[i + 1] as usize] {
             out.extend_from_slice(&x.to_le_bytes());
+        }
+        if topo {
+            let (t0, t1) = (mesh.bvh.leaf_tri_off[leaf as usize], mesh.bvh.leaf_tri_off[leaf as usize + 1]);
+            let n = (t1 - t0) as usize;
+            out.extend_from_slice(&t0.to_le_bytes());
+            out.extend_from_slice(&(n as u32).to_le_bytes());
+            for &v in &states.tris[3 * tat..3 * (tat + n)] {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+            out.extend_from_slice(&states.pn[tat..tat + n]);
+            while out.len() % 4 != 0 {
+                out.push(0);
+            }
+            tat += n;
         }
     }
     let payload_len = (out.len() - HEADER_BYTES) as u32;
@@ -269,6 +289,7 @@ pub fn apply_record(mesh: &mut EditMesh, bytes: &[u8]) -> Result<(u32, usize), R
         return Err(RecordError::BadMagic);
     }
     let seq = rd(bytes, 4);
+    let topo = rd(bytes, 8) & KIND_TOPO != 0;
     let nleaves = rd(bytes, 12) as usize;
     let len = rd(bytes, 16) as usize;
     let crc = rd(bytes, 20);
@@ -293,13 +314,42 @@ pub fn apply_record(mesh: &mut EditMesh, bytes: &[u8]) -> Result<(u32, usize), R
         if leaf >= mesh.nleaves() || mesh.leaf_range(leaf) != (start, start + count) || at + 12 + count * 12 > payload.len() {
             return Err(RecordError::BadLeaf);
         }
-        spans.push((start, count, at + 12));
+        let data_at = at + 12;
         at += 12 + count * 12;
+        let mut tri_at = usize::MAX;
+        if topo {
+            if at + 8 > payload.len() {
+                return Err(RecordError::Truncated);
+            }
+            let (t0, n) = (rd(payload, at) as usize, rd(payload, at + 4) as usize);
+            let span = (mesh.bvh.leaf_tri_off[leaf] as usize, mesh.bvh.leaf_tri_off[leaf + 1] as usize);
+            let bytes = 8 + 12 * n + n.div_ceil(4) * 4;
+            if span != (t0, t0 + n) || at + bytes > payload.len() {
+                return Err(RecordError::BadLeaf);
+            }
+            // Every corner must name a vertex of this mesh.
+            for i in 0..3 * n {
+                if rd(payload, at + 8 + 4 * i) as usize >= mesh.nverts() {
+                    return Err(RecordError::BadLeaf);
+                }
+            }
+            tri_at = at + 8;
+            at += bytes;
+        }
+        spans.push((leaf, start, count, data_at, tri_at));
     }
-    for (start, count, data_at) in spans {
+    for &(_, start, count, data_at, _) in &spans {
         for i in 0..count * 3 {
             let o = data_at + 4 * i;
             mesh.positions[3 * start + i] = f32::from_le_bytes([payload[o], payload[o + 1], payload[o + 2], payload[o + 3]]);
+        }
+    }
+    if topo {
+        for &(leaf, _, _, _, tri_at) in &spans {
+            let n = (mesh.bvh.leaf_tri_off[leaf + 1] - mesh.bvh.leaf_tri_off[leaf]) as usize;
+            let tris: Vec<u32> = (0..3 * n).map(|i| rd(payload, tri_at + 4 * i)).collect();
+            let pn = &payload[tri_at + 12 * n..tri_at + 13 * n];
+            crate::dyntopo::write_leaf_tris(mesh, leaf, &tris, pn);
         }
     }
     Ok((seq, end))
@@ -311,6 +361,7 @@ pub fn record_leaves(bytes: &[u8]) -> Vec<u32> {
     if bytes.len() < HEADER_BYTES {
         return out;
     }
+    let topo = rd(bytes, 8) & KIND_TOPO != 0;
     let nleaves = rd(bytes, 12) as usize;
     let mut at = HEADER_BYTES;
     for _ in 0..nleaves {
@@ -320,6 +371,13 @@ pub fn record_leaves(bytes: &[u8]) -> Vec<u32> {
         out.push(rd(bytes, at));
         let count = rd(bytes, at + 8) as usize;
         at += 12 + count * 12;
+        if topo {
+            if at + 8 > bytes.len() {
+                break;
+            }
+            let n = rd(bytes, at + 4) as usize;
+            at += 8 + 12 * n + n.div_ceil(4) * 4;
+        }
     }
     out
 }

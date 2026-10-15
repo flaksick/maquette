@@ -23,6 +23,7 @@
 mod tests;
 
 pub mod abi;
+mod engine;
 
 use crate::bvh::{Bvh, NONE};
 use crate::engine::StampSet;
@@ -109,6 +110,11 @@ pub struct DynState {
 }
 
 impl DynState {
+    /// Topology can change here: dynamic adjacency and free lists for this layout.
+    pub fn ready(&self, m: &EditMesh) -> bool {
+        m.topo.is_dynamic() && self.vfree.len() == m.nleaves()
+    }
+
     pub fn note_leaf(&mut self, leaf: u32, nleaves: usize) {
         if self.topo_stamp.len() != nleaves {
             self.topo_stamp = vec![0; nleaves];

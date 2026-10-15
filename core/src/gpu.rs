@@ -14,6 +14,10 @@ pub const PAGE_VERTS: usize = PAGE_BYTES / STRIDE;
 
 pub const CMD_VERTEX: u32 = 0;
 pub const CMD_INDEX: u32 = 1;
+/// Whole-page replacement (TOP-3 dyntopo: a page whose triangles changed): the renderer re-creates
+/// the page's vertex (2) / index (3) buffer from the data, whatever its previous size.
+pub const CMD_VERTEX_FULL: u32 = 2;
+pub const CMD_INDEX_FULL: u32 = 3;
 pub const CMD_WORDS: usize = 5;
 
 pub struct Page {
@@ -54,6 +58,8 @@ pub struct Gpu {
     pub cmds: Vec<u32>,
     page_stamp: Vec<u32>,
     stamp_id: u32,
+    /// Vertex limit per page (PAGE_VERTS, or smaller for dyntopo layouts).
+    pub limit: usize,
 }
 
 #[inline]
@@ -70,6 +76,44 @@ fn pack(arena: &mut Vec<u8>, mesh: &EditMesh, v: usize) {
 
 impl Gpu {
     pub fn build(mesh: &EditMesh) -> Gpu {
+        Gpu::build_limit(mesh, PAGE_VERTS)
+    }
+
+    /// Page of a leaf.
+    pub fn page_of(&self, leaf: usize) -> usize {
+        self.page_of_leaf[leaf] as usize
+    }
+
+    /// Full contents of several pages in one batch (CMD_VERTEX_FULL / CMD_INDEX_FULL per page).
+    pub fn full_pages(&mut self, mesh: &EditMesh, pages: &[usize]) {
+        self.arena.clear();
+        self.cmds.clear();
+        for &p in pages {
+            let page = &self.pages[p];
+            let src = self.arena.len();
+            for v in page.vstart..page.vend {
+                pack(&mut self.arena, mesh, v as usize);
+            }
+            for &v in &page.foreign {
+                pack(&mut self.arena, mesh, v as usize);
+            }
+            let vbytes = self.arena.len() - src;
+            let isrc = self.arena.len();
+            for l in page.leaf_start as usize..page.leaf_end as usize {
+                for t in mesh.bvh.leaf_tri_off[l] as usize..mesh.bvh.leaf_tri_off[l + 1] as usize {
+                    for k in 0..3 {
+                        let local = page.local(mesh.tris[3 * t + k]);
+                        self.arena.extend_from_slice(&local.to_le_bytes());
+                    }
+                }
+            }
+            let ibytes = self.arena.len() - isrc;
+            self.cmd(CMD_VERTEX_FULL, p, 0, src, vbytes);
+            self.cmd(CMD_INDEX_FULL, p, 0, isrc, ibytes);
+        }
+    }
+
+    pub fn build_limit(mesh: &EditMesh, limit: usize) -> Gpu {
         let nleaves = mesh.nleaves();
         let mut pages = Vec::new();
         let mut page_of_leaf = vec![0u32; nleaves];
@@ -82,7 +126,7 @@ impl Gpu {
             while leaf < nleaves {
                 let (a, b) = mesh.leaf_range(leaf);
                 debug_assert_eq!(a, vend);
-                if leaf > start && (b - vstart) as f32 > PAGE_VERTS as f32 * 0.9 {
+                if leaf > start && (b - vstart) as f32 > limit as f32 * 0.9 {
                     break;
                 }
                 vend = b;
@@ -134,6 +178,7 @@ impl Gpu {
             cmds: Vec::new(),
             page_stamp: vec![0; np],
             stamp_id: 0,
+            limit,
         }
     }
 

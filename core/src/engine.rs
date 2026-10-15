@@ -154,6 +154,8 @@ pub struct Engine {
     /// Upper bound on how far any vertex moved since the BVH was last refit (widens selections).
     pub(crate) stale: f32,
     pub(crate) stroke: StrokeState,
+    /// Dynamic topology (TOP-3, dyntopo/).
+    pub dyn_topo: crate::dyntopo::DynState,
 }
 
 impl Engine {
@@ -194,6 +196,7 @@ impl Engine {
             orig_n: OrigNormals::new(nl),
             stale: 0.0,
             stroke: StrokeState::default(),
+            dyn_topo: Default::default(),
             mesh,
         }
     }
@@ -235,6 +238,9 @@ impl Engine {
         let Some(hit) = self.raycast_screen(x, y) else { return false };
         let r = self.cam.world_radius(self.radius_px_at(p), hit.point);
         let s = self.dab_strength(p);
+        if self.tx.topo {
+            self.dyntopo_dab(hit.point, r, self.radius_px_at(p));
+        }
         self.dab(tool, hit.point, r, s, hit.normal);
         self.last_dab = [hit.point[0], hit.point[1], hit.point[2], hit.normal[0], hit.normal[1], hit.normal[2], r];
         self.stroke.dabs += 1;
@@ -263,6 +269,7 @@ impl Engine {
 
     pub fn stroke_begin(&mut self, x: f32, y: f32, p: f32) -> bool {
         self.refit_pending();
+        self.tx.topo = self.dyn_topo.on && self.dyn_topo.ready(&self.mesh);
         self.tx.begin();
         self.orig_n.begin(self.mesh.nleaves());
         let tool = self.brush.tool;
@@ -335,7 +342,7 @@ impl Engine {
             return 0;
         }
         let before = std::mem::take(&mut self.tx.before);
-        let after = LeafStates::capture(&self.mesh, &before.leaves);
+        let after = if before.is_topo() { LeafStates::capture_topo(&self.mesh, &before.leaves) } else { LeafStates::capture(&self.mesh, &before.leaves) };
         self.seq += 1;
         encode_record(&mut self.out, self.seq, KIND_STROKE, &after, &self.mesh);
         self.hist.push(UndoEntry { before, after });
@@ -358,6 +365,9 @@ impl Engine {
         let Some(states) = self.hist.undo(&mut self.mesh) else { return 0 };
         let states = states.clone();
         self.mark_states(&states.leaves);
+        if states.is_topo() {
+            self.dyntopo_restored(&states.leaves);
+        }
         self.seq += 1;
         encode_record(&mut self.out, self.seq, KIND_UNDO, &states, &self.mesh);
         self.out.len()
@@ -370,6 +380,9 @@ impl Engine {
         let Some(states) = self.hist.redo(&mut self.mesh) else { return 0 };
         let states = states.clone();
         self.mark_states(&states.leaves);
+        if states.is_topo() {
+            self.dyntopo_restored(&states.leaves);
+        }
         self.seq += 1;
         encode_record(&mut self.out, self.seq, KIND_REDO, &states, &self.mesh);
         self.out.len()
@@ -380,6 +393,9 @@ impl Engine {
         let (seq, used) = crate::history::apply_record(&mut self.mesh, bytes)?;
         let leaves = crate::history::record_leaves(&bytes[..used]);
         self.mark_states(&leaves);
+        if u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) & crate::history::KIND_TOPO != 0 {
+            self.dyntopo_restored(&leaves);
+        }
         self.seq = self.seq.max(seq);
         Ok((seq, used))
     }
@@ -390,7 +406,7 @@ impl Engine {
     /// commands. Returns the number of upload commands.
     pub fn frame_update(&mut self) -> usize {
         self.gpu.cmds.clear();
-        if self.modified.list.is_empty() {
+        if self.modified.list.is_empty() && self.dyn_topo.topo_leaves.is_empty() {
             return 0;
         }
         self.normal_set.clear();
@@ -424,7 +440,11 @@ impl Engine {
         self.mesh.bvh.refit_internal();
         self.stale = 0.0;
         let mut dirty = std::mem::take(&mut self.gpu_leaves.list);
-        self.gpu.update(&self.mesh, &mut dirty);
+        if self.dyn_topo.topo_leaves.is_empty() {
+            self.gpu.update(&self.mesh, &mut dirty);
+        } else {
+            self.dyntopo_gpu(&dirty); // triangles changed: whole pages (dyntopo/engine.rs)
+        }
         self.gpu_leaves.list = dirty;
         self.modified.clear();
         self.gpu.ncmds()
