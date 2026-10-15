@@ -8,7 +8,7 @@ import { BUDGET, CHANNEL } from './config';
 import { SHEETS, ui } from './state';
 import { bus } from './bus';
 import { InputController } from './input';
-import { registerServiceWorker } from './sw-client';
+import { registerServiceWorker, reportBootOk, reverted } from './sw-client';
 import { call, connectLibrary, onEngineMessage, openProject, refreshProjects, watchStorage } from './projects';
 import { loadPrefs, onProjectOpened, prefs, savePrefsNow, setPref } from './prefs';
 import { io, ioMessage } from './io-ui';
@@ -95,6 +95,7 @@ function onEngine(m: FromEngine): void {
       break;
     case 'ready':
       ui.ready.value = true;
+      void reportBootOk(); // PLT-3: this version opened a project; the worker marks it good
       onResize(); // the layout may have changed while the engine was starting
       ui.stats.value = m.stats;
       ui.simd.value = m.simd;
@@ -153,6 +154,10 @@ bus.query = query;
 render(<App />, document.getElementById('root')!);
 startEngine();
 void registerServiceWorker();
+// PLT-3: say it when Maquette went back to the previous version after a release failed to start.
+reverted.subscribe((r) => {
+  if (r) ui.notice.value = { level: 'warn', text: `Maquette went back to version ${r.to}: version ${r.from} failed to start twice. Your projects are untouched.` };
+});
 // The canvas backing store must track the viewport's real size. Window 'resize' isn't enough:
 // in a Home Screen app the status bar / safe-area layout settles after launch without one,
 // which left the scene stretched. A ResizeObserver sees every layout change.

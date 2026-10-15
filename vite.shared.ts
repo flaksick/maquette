@@ -13,7 +13,9 @@ function walk(dir: string): string[] {
   });
 }
 
-export function precacheManifest(outDir: string, stamps: Record<string, string> = {}): Plugin {
+/** `stampVersion: false` keeps the version out of sw.js: the app's worker is one stable file that
+ *  reads versions from versions.json / precache.json (PLT-3); the probe's worker embeds it. */
+export function precacheManifest(outDir: string, stamps: Record<string, string> = {}, opts: { stampVersion?: boolean } = {}): Plugin {
   return {
     name: 'maquette-precache-manifest',
     apply: 'build',
@@ -34,7 +36,7 @@ export function precacheManifest(outDir: string, stamps: Record<string, string> 
       writeFileSync(join(outDir, 'precache.json'), JSON.stringify({ version, files: entries }, null, 1));
       const swPath = join(outDir, 'sw.js');
       let sw = readFileSync(swPath, 'utf8');
-      for (const [k, v] of Object.entries({ __PRECACHE_VERSION__: version, ...stamps })) {
+      for (const [k, v] of Object.entries({ ...(opts.stampVersion === false ? {} : { __PRECACHE_VERSION__: version }), ...stamps })) {
         if (!sw.includes(k)) throw new Error(`sw.js lost its ${k} placeholder`);
         sw = sw.split(k).join(v);
       }
