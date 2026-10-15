@@ -3,7 +3,7 @@
 _Generated from `spec.yaml` by `scripts/gen-spec.mjs`. Do not hand-edit._
 
 **134 features** @ spec.yaml: 65 daily, 58 regular, 11 niche.
-First-ship phase counts @ spec.yaml: P0 1, P1a 30, P1b 17, P2 18, P3 18, P4 14, P5 14, P6 13, P7 9.
+First-ship phase counts @ spec.yaml: P0 1, P1a 30, P1b 16, P2 19, P3 18, P4 14, P5 14, P6 13, P7 9.
 Current phase @ spec.yaml: **P1b** (controls may only render for features of this phase or earlier).
 Status is computed from tagged test results and device reports (`npm run verify`), never written here.
 
@@ -59,7 +59,7 @@ Status is computed from tagged test results and device reports (`npm run verify`
 | ID | Feature | Tier | Phase | Done when | Test |
 |---|---|---|---|---|---|
 | PRM-1 | Quad sphere | D | P1a | All-quad cube-sphere; resolution slider shows polys; radius error < 0.5% | unit |
-| PRM-2 | Other primitives | D | P1b (shapes + resolution in P1b; parametric until first sculpt in P2) | Cube, cylinder, cone, torus, plane, capsule, icosphere; parametric until first sculpt; watertight (plane: boundary) | unit per primitive |
+| PRM-2 | Other primitives | D | P2 (shipped: the seven shapes with resolution; not built yet: parametric until first sculpt) | Cube, cylinder, cone, torus, plane, capsule, icosphere; parametric until first sculpt; watertight (plane: boundary) | unit per primitive |
 | PRM-3 | Tube / Lathe from a curve | R | P6 | Radius profile along a drawn curve; lathe revolve | unit + e2e |
 | PRM-4 | Extract shell from mask | R | P6 | Watertight; thickness slider | unit |
 

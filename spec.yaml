@@ -77,7 +77,7 @@ features:
   - {id: SCN-3, tier: N, phase: P7, name: "Instances, hierarchy, repeaters, lattice", done_when: "Deferred: kitbashing and stylized work, not single-piece sculpting", test: "-"}
   - {id: SCN-4, tier: N, phase: P7, name: Live link to Blender, done_when: "Deferred: the share sheet covers the hand-off", test: "-"}
   - {id: PRM-1, tier: D, phase: P1a, name: Quad sphere, done_when: "All-quad cube-sphere; resolution slider shows polys; radius error < 0.5%", test: unit}
-  - {id: PRM-2, tier: D, phase: P1b, note: "shapes + resolution in P1b; parametric until first sculpt in P2", name: Other primitives, done_when: "Cube, cylinder, cone, torus, plane, capsule, icosphere; parametric until first sculpt; watertight (plane: boundary)", test: "unit per primitive"}
+  - {id: PRM-2, tier: D, phase: P2, note: "shipped: the seven shapes with resolution; not built yet: parametric until first sculpt", name: Other primitives, done_when: "Cube, cylinder, cone, torus, plane, capsule, icosphere; parametric until first sculpt; watertight (plane: boundary)", test: "unit per primitive"}
   - {id: PRM-3, tier: R, phase: P6, name: Tube / Lathe from a curve, done_when: "Radius profile along a drawn curve; lathe revolve", test: "unit + e2e"}
   - {id: PRM-4, tier: R, phase: P6, name: Extract shell from mask, done_when: "Watertight; thickness slider", test: unit}
 
