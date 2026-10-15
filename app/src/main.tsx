@@ -6,6 +6,7 @@ import PersistWorker from './persist/persist.worker?worker';
 import { App, finishKillTest } from './app';
 import { BUDGET, CHANNEL } from './config';
 import { SHEETS, ui } from './state';
+import { camera as navCamera } from './navgizmo';
 import { bus } from './bus';
 import { InputController } from './input';
 import { registerServiceWorker, reportBootOk, reverted } from './sw-client';
@@ -91,6 +92,9 @@ function onEngine(m: FromEngine): void {
   if (m.type === 'ready') holdPresets(); // its restored brush is not a preset change (prefs.ts)
   ioMessage(m); // [io] import report, units, STL export details
   switch (m.type) {
+    case 'camera': // NAV-4: the orb follows the camera
+      navCamera.value = m;
+      break;
     case 'project':
       if (m.view) ui.view.value = m.view;
       if (m.error) ui.notice.value = { level: 'warn', text: m.error };
@@ -186,6 +190,7 @@ document.addEventListener('visibilitychange', () => send({ type: document.visibi
   send,
   input: input.stats,
   sheets: SHEETS,
+  nav: { camera: () => navCamera.value }, // NAV-4 test hook
   io,
   // P1b test and diagnostics hooks: the library (persist worker) and preferences.
   budget: { state: budget, bench: benchRun, stress: stressRun, runBench, startStressTest },

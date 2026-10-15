@@ -723,7 +723,7 @@ impl Engine {
     /// ("front-facing wins"). The weights ignore the brush's falloff so every preset samples the
     /// same plane.
     fn area_plane(&mut self, c: [f32; 3], r: f32, original: bool, fallback: Plane) -> Plane {
-        let to_eye = sub(self.cam.eye, c);
+        let to_eye = self.cam.to_eye(c);
         let r2 = r * r;
         let mut nacc = [[0.0f32; 3]; 2];
         let mut pacc = [[0.0f32; 3]; 2];
