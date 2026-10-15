@@ -13,8 +13,14 @@ Screen. Everything runs on the device; GitHub Pages only serves the static files
 ## Status
 **P0 done 2026-10-13** (device report `reports/2026-10-13-air4-safari26.6.json`; decisions in
 DECISIONS.md): 4 GB-class budget prior 1,459 MB; Rust + SIMD confirmed (composite 1.22); GPU draws
-8M tris at 57 fps; threads viable but deferred. **Now: P1a "First clay"**: the installable app that
-never loses work, with the first brushes.
+8M tris at 57 fps; threads viable but deferred.
+**Shipped to prod 2026-10-15** (app 131380e1c4dd; `npm run verify` 31 pass, 0 fail): P1a and P1b
+complete (projects gallery + backups, OBJ/STL import + STL export, units, per-iPad budgets,
+versioned safe updates), plus from P2/P3: 14 brushes + falloff/hardness/XYZ symmetry, Invert and
+hold buttons, stabilizer, voxel remesh, dyntopo, primitives, Smooth/Flat/Wire shading, navigation
+orb with ortho. Feature status is computed: `npm run status`.
+**Next:** mask brush (MSK-1), dyntopo for Grab/Snake Hook and saved detail settings, parametric
+primitives, custom falloff curve, and the device timings still marked device-pending.
 
 ## Layout
 ```
