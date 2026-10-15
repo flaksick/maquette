@@ -1,5 +1,5 @@
 {
- "version": "86667791f6c4",
+ "version": "899e6c685409",
  "files": [
   {
    "url": "assets/balloon.worker-Dg78DWow.js",
@@ -7,29 +7,29 @@
    "sha256": "965eec3a3075b7c4430568fc1a75c9bf946776254088b2c998d3c163c17aad60"
   },
   {
-   "url": "assets/bench.worker-B1hlYzoK.js",
+   "url": "assets/bench.worker-DXw1eFAC.js",
    "bytes": 8063,
-   "sha256": "413d2e5f01efd8050853805b1a359259cf251f857adec03b0eb3ba30182fe2f6"
+   "sha256": "3e0b271674cd3d96e13efaf192843da4d19e180dc8cbfd72480e85763d588dbf"
   },
   {
-   "url": "assets/core.scalar-CEyXOuIl.wasm",
-   "bytes": 291598,
-   "sha256": "5e6caeef56caf870c79b74f445c3e588f77aa319227eedad3ebac4277daec934"
+   "url": "assets/core.scalar-vo6G0t8V.wasm",
+   "bytes": 404447,
+   "sha256": "c0b6be3a9f13b3b6e4dc87e84ee755ec51408365f40876d63bb45f20db26c5d3"
   },
   {
-   "url": "assets/core.simd-DkZd-DWG.wasm",
-   "bytes": 295215,
-   "sha256": "8db36946238a3061fca148bc8e42607b9b9aee0a9eb453ad2b2e4e9efb5fb25b"
+   "url": "assets/core.simd-epy3HJOy.wasm",
+   "bytes": 407128,
+   "sha256": "209d0e0538ddf311ca0bd955ccff065cc5d9d0e7ebe75e9346b05d45de7c52ad"
   },
   {
-   "url": "assets/engine.worker-DXDJwuPW.js",
-   "bytes": 26068,
-   "sha256": "1b00132fe0719c602d3774a688adbf31e254a929be49de83d3297c375cd9a4a4"
+   "url": "assets/engine.worker-C9S0rmPu.js",
+   "bytes": 29333,
+   "sha256": "4f12b95429b1aca56aaad00dac923781a7b9af0550e26116613d83cf2ccefdcc"
   },
   {
-   "url": "assets/index-BEZGbBX1.js",
-   "bytes": 75671,
-   "sha256": "e5b5bb9cbb61bd6716596db1a346d5265ba52fb54964e8da03825a2bc253c7fd"
+   "url": "assets/index-Byz3dCoZ.js",
+   "bytes": 79129,
+   "sha256": "2167840ec13f23119b15d59e7d4ca713c4fe2f32134ec26abfd826a0be03b14e"
   },
   {
    "url": "assets/index-CiXAZcSH.css",
@@ -37,9 +37,9 @@
    "sha256": "14898762d5dbb946119081f53affb57b95d0f55eaacb8766339e29b05a763e5f"
   },
   {
-   "url": "assets/persist.worker-CeobQQrY.js",
-   "bytes": 30015,
-   "sha256": "b755ca6b3db4a226ff2eece98f2d2a625115b1d9722ab3425eff9f055a29eb82"
+   "url": "assets/persist.worker-BIIVJzrd.js",
+   "bytes": 31314,
+   "sha256": "49f0829fe80b2251675bded480826df2ab51729379f3eea480b2385f01bfc993"
   },
   {
    "url": "assets/stress.worker-C3JmxH8x.js",
@@ -64,7 +64,7 @@
   {
    "url": "index.html",
    "bytes": 834,
-   "sha256": "63771d6b8a14034d025301216197b8ae3c1814b5130bb71a635eed1cb19fab1f"
+   "sha256": "7d2b6e69624e76690a8dd8d7757e1344b341c3c2a8f2b06b31fa3c441461e76b"
   },
   {
    "url": "manifest.webmanifest",
