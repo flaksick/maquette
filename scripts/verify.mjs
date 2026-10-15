@@ -41,7 +41,9 @@ mkdirSync('test-results', { recursive: true });
 // stays in memory because Playwright empties test-results/ when it starts)
 let rustText = '';
 {
-  const r = sh('cd core && cargo test 2>&1');
+  // One test at a time: native timing tests (ms/dab at 1M) measured 1.8x slow while sharing the
+  // CPU with the fuzz tests (8.17 vs 4.6 ms alone), so parallel runs made their numbers noise.
+  const r = sh('cd core && cargo test -- --test-threads=1 2>&1');
   rustText = r.stdout;
   const m = /test result: \w+\. (\d+) passed; (\d+) failed/.exec(r.stdout);
   const passed = m ? Number(m[1]) : 0;

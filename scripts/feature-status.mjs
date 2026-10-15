@@ -165,7 +165,7 @@ export function printStatus(spec, rows, later = []) {
 export function rustOutput(file) {
   if (file) return readFileSync(file, 'utf8');
   const env = { ...process.env, PATH: `/opt/homebrew/opt/rustup/bin:${homedir()}/.cargo/bin:/opt/homebrew/bin:${process.env.PATH}` };
-  const r = spawnSync('sh', ['-c', 'cd core && cargo test 2>&1'], { encoding: 'utf8', env, maxBuffer: 64 * 2 ** 20 });
+  const r = spawnSync('sh', ['-c', 'cd core && cargo test -- --test-threads=1 2>&1'], { encoding: 'utf8', env, maxBuffer: 64 * 2 ** 20 });
   return r.stdout;
 }
 
