@@ -68,6 +68,7 @@ export interface Exports {
   eng_import(ptr: number, len: number, hint: number, leafMax: number): number;
   eng_export_stl(scale: number, info: number): number;
   eng_mesh_check(out: number): number;
+  eng_new_primitive(kind: number, n: number, leafMax: number): number; // PRM-2, core/src/primitives.rs
 }
 
 export class Core {

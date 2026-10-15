@@ -12,6 +12,7 @@ pub mod kernels;
 pub mod mat4;
 pub mod math;
 pub mod objio;
+pub mod primitives;
 pub mod mesh;
 pub mod remesh;
 pub mod simd;

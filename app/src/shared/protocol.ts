@@ -83,6 +83,7 @@ export type ToEngine =
   | { type: 'frame-view' }
   | { type: 'reset-view' }
   | { type: 'new-sphere'; n: number }
+  | { type: 'new-primitive'; kind: import('../primitives').PrimitiveKind; n: number } // PRM-2
   | { type: 'export-obj' }
   // [io] import / units / STL export (IMP-0/1/2, PRJ-9, EXP-2)
   | { type: 'import-mesh'; name: string; ext: string; bytes: ArrayBuffer }

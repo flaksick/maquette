@@ -230,6 +230,24 @@ else {
     );
   }
 }
+// PRM-2: Blender oracle on each primitive's OBJ (tests/primitives.spec.ts exports one per shape)
+{
+  const shapes = ['cube', 'cylinder', 'cone', 'torus', 'plane', 'capsule', 'icosphere'];
+  const want = '7/7 counts exact, bbox <= 1e-4';
+  const files = shapes.map((s) => `test-results/prm2-${s}.obj`);
+  if (!existsSync(BLENDER)) rec('Blender oracle (PRM-2)', 'Blender not installed', want, null);
+  else if (files.some((f) => !existsSync(f) || statSync(f).mtimeMs < e2eStart)) rec('Blender oracle (PRM-2)', 'no fresh primitive exports (e2e skipped?)', want, null);
+  else {
+    const out = files.map((f) => {
+      const line = sh(`"${BLENDER}" --background --factory-startup --python oracle/check_obj.py -- ${f} 2>&1`).stdout.split('\n').find((l) => l.startsWith('ORACLE '));
+      return line ? JSON.parse(line.slice(7)) : null;
+    });
+    writeFileSync('test-results/oracle-prm2.json', JSON.stringify(Object.fromEntries(shapes.map((s, i) => [s, out[i]])), null, 1));
+    const pass = out.filter((o) => o?.pass).length;
+    const nm = out.map((o, i) => `${shapes[i]} ${o?.blender.non_manifold_edges ?? '?'}`).join(', ');
+    rec('Blender oracle (PRM-2)', `${pass}/${shapes.length} pass`, want, pass === shapes.length, `non-manifold edges: ${nm} (plane = its border)`);
+  }
+}
 // ----- [io] end -----
 
 // 12. Feature status, computed from the tagged tests above and fresh device reports. Runs before

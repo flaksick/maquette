@@ -12,6 +12,7 @@ import { ProjectsSheet } from './gallery';
 import { DiskBanner, GestureCard, StorageSettings } from './safety';
 import { NavGizmo } from './navgizmo';
 import { ExportFormat, ImportButton, ImportSheet, requestExport } from './io-ui'; // [io]
+import { SHAPES, SHAPE_ORDER, shapeCounts, type ShapeKind } from './primitives'; // PRM-2
 import { budget, benchRun, stressRun, runBench, startStressTest, markKillTest, deviceFeatures } from './budget-client';
 import { budgetSource, ceilingSource, fmtMB, fmtTris, shortSource, APP_BYTES_PER_TRI } from './budget';
 import { RemeshButton, RemeshProgress, RemeshSheet } from './remesh'; // TOP-1
@@ -238,21 +239,34 @@ function ViewButtons() {
 }
 
 function NewSheet() {
-  const [n, setN] = useState(96);
-  const tris = 12 * n * n;
+  // PRM-1 sphere and PRM-2 primitives: one picker, one resolution slider each, same create path.
+  const [shape, setShape] = useState<ShapeKind>('sphere');
+  const [res, setRes] = useState<Record<ShapeKind, number>>(() => Object.fromEntries(SHAPE_ORDER.map((k) => [k, SHAPES[k].def])) as Record<ShapeKind, number>);
+  const def = SHAPES[shape];
+  const n = res[shape];
+  const c = shapeCounts(shape, n);
+  const tris = c.tris;
   const needMB = Math.round((tris * APP_BYTES_PER_TRI) / 2 ** 20);
   const b = budget.value;
   const fits = needMB <= b.budgetMB; // the engine re-checks with steady memory (PLT-8 pre-flight)
   const comfy = b.bench?.comfortableTris ?? 0;
   return (
-    <Sheet title="New sphere">
-      <p class="dim">An all-quad sphere. The current sculpt stays saved on this iPad.</p>
+    <Sheet title={`New ${def.label.toLowerCase()}`}>
+      <div class="shapes" role="radiogroup" aria-label="Shape">
+        {SHAPE_ORDER.map((k) => (
+          <button key={k} role="radio" aria-checked={k === shape} class={k === shape ? 'on' : ''} data-feature={SHAPES[k].feature} onClick={() => setShape(k)}>
+            {SHAPES[k].label}
+          </button>
+        ))}
+      </div>
+      <p class="dim">{def.blurb} The current sculpt stays saved on this iPad.</p>
       <label class="row">
-        Resolution
-        <input type="range" min={8} max={512} step={8} value={n} onInput={(e) => setN(Number((e.target as HTMLInputElement).value))} data-feature="PRM-1" />
+        {def.param}
+        <input type="range" min={def.min} max={def.max} step={def.step} value={n} onInput={(e) => setRes({ ...res, [shape]: Number((e.target as HTMLInputElement).value) })} data-feature={def.feature} />
+        <span class="dim">{n}</span>
       </label>
-      <p>
-        {fmt(tris)} triangles · about {fmt(needMB)} MB of a {fmt(b.budgetMB)} MB budget ({budgetSource(b)})
+      <p data-polys={c.quads + c.triFaces} data-tris={tris}>
+        {fmt(c.quads + c.triFaces)} polys{c.triFaces && c.quads ? ` (${fmt(c.quads)} quads, ${fmt(c.triFaces)} triangles)` : ''} · {fmt(tris)} triangles · about {fmt(needMB)} MB of a {fmt(b.budgetMB)} MB budget ({budgetSource(b)})
         {fits ? '' : ` · over this iPad's budget`}
       </p>
       {comfy > 0 && tris > comfy && (
@@ -260,8 +274,8 @@ function NewSheet() {
           Above this iPad's comfortable {fmtTris(comfy)} triangles (speed test): brushes may lag.
         </p>
       )}
-      <button class="primary" data-feature="PRM-1" disabled={!fits} onClick={() => {
-        bus.send({ type: 'new-sphere', n });
+      <button class="primary" data-feature={def.feature} disabled={!fits} onClick={() => {
+        bus.send(shape === 'sphere' ? { type: 'new-sphere', n } : { type: 'new-primitive', kind: shape, n });
         ui.sheet.value = 'none';
       }}>
         Create
