@@ -1,6 +1,6 @@
 //! Dyntopo inside the engine's stroke, undo and frame paths (engine.rs calls these).
 
-use super::{is_dead, scan_free_leaf, update_region};
+use super::{is_dead, scan_free_leaf, update_region_budget, MAX_COLLAPSES_PER_DAB, MAX_SPLITS_PER_DAB};
 use crate::engine::Engine;
 use crate::gpu::Gpu;
 
@@ -8,16 +8,19 @@ impl Engine {
     /// Topology update for one dab (and its mirror), before the brush moves anything.
     pub(crate) fn dyntopo_dab(&mut self, c: [f32; 3], r: f32, r_px: f32) {
         let lmax = self.dyn_topo.detail.max_edge(r, r_px);
+        self.dyn_topo.begin_dab();
         let mirror = [-c[0], c[1], c[2]];
         let centers: &[[f32; 3]] = if self.brush.symmetry_x && c[0].abs() > 1e-6 { &[c, mirror] } else { &[c] };
+        let n = centers.len() as u32;
         for &cc in centers {
-            update_region(&mut self.mesh, &mut self.dyn_topo, &mut self.tx, &mut self.modified, cc, r, lmax);
+            update_region_budget(&mut self.mesh, &mut self.dyn_topo, &mut self.tx, &mut self.modified, cc, r, lmax, MAX_SPLITS_PER_DAB / n, MAX_COLLAPSES_PER_DAB / n);
         }
         // The brush selects right after: bounds of the leaves whose triangles changed, now.
-        if !self.dyn_topo.topo_leaves.is_empty() {
-            let leaves = self.dyn_topo.topo_leaves.clone();
+        if !self.dyn_topo.dab_leaves.is_empty() {
+            let leaves = std::mem::take(&mut self.dyn_topo.dab_leaves);
             self.mesh.bvh.refit_leaves(&self.mesh.positions, &self.mesh.tris, &leaves);
             self.mesh.bvh.refit_internal();
+            self.dyn_topo.dab_leaves = leaves;
         }
     }
 

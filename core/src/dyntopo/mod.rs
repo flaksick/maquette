@@ -35,9 +35,10 @@ use crate::topo::Topo;
 
 /// Blender: min edge length = 0.4 x max edge length.
 pub const MIN_RATIO: f32 = 0.4;
-/// Bounded work per dab (keeps a dab within the frame budget).
-pub const MAX_SPLITS_PER_DAB: u32 = 3000;
-pub const MAX_COLLAPSES_PER_DAB: u32 = 1000;
+/// Bounded work per dab, shared by its mirror (keeps a dab within the frame budget: ~1.7 us per
+/// split and ~3.6 us per collapse natively at 1M triangles; what's left continues next dab).
+pub const MAX_SPLITS_PER_DAB: u32 = 800;
+pub const MAX_COLLAPSES_PER_DAB: u32 = 300;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DetailMode {
@@ -96,6 +97,10 @@ pub struct DynState {
     /// Leaves whose triangles changed since the last frame (GPU pages to rebuild).
     pub topo_leaves: Vec<u32>,
     topo_stamp: Vec<u8>,
+    /// Leaves whose triangles changed in the current dab (bounds to refit before the brush).
+    pub dab_leaves: Vec<u32>,
+    dab_stamp: Vec<u32>,
+    dab_id: u32,
     /// Topology changed since the project files were last written whole.
     pub topo_dirty: bool,
     pub splits: u64,
@@ -110,6 +115,12 @@ pub struct DynState {
 }
 
 impl DynState {
+    /// Starts a dab: `dab_leaves` collects what this dab changes.
+    pub fn begin_dab(&mut self) {
+        self.dab_id = self.dab_id.wrapping_add(1).max(1);
+        self.dab_leaves.clear();
+    }
+
     /// Topology can change here: dynamic adjacency and free lists for this layout.
     pub fn ready(&self, m: &EditMesh) -> bool {
         m.topo.is_dynamic() && self.vfree.len() == m.nleaves()
@@ -122,6 +133,13 @@ impl DynState {
         if self.topo_stamp[leaf as usize] == 0 {
             self.topo_stamp[leaf as usize] = 1;
             self.topo_leaves.push(leaf);
+        }
+        if self.dab_stamp.len() != nleaves {
+            self.dab_stamp = vec![0; nleaves];
+        }
+        if self.dab_stamp[leaf as usize] != self.dab_id {
+            self.dab_stamp[leaf as usize] = self.dab_id;
+            self.dab_leaves.push(leaf);
         }
         self.topo_dirty = true;
     }
@@ -326,6 +344,18 @@ pub fn scan_free_leaf(m: &EditMesh, st: &mut DynState, leaf: usize) {
 /// Re-lays the live mesh out with `slack` x room in every leaf (+ a fixed minimum): the dyntopo
 /// layout. Geometry is unchanged; slot ids change (a heavy op, undone through a snapshot).
 pub fn relayout(m: &EditMesh, slack: f32, leaf_max: usize) -> EditMesh {
+    with_slack(&compact_mesh(m, leaf_max), slack)
+}
+
+/// The live mesh without slack (exports), or None when there are no dead slots.
+pub fn compact(m: &EditMesh) -> Option<EditMesh> {
+    if !(0..m.ntris()).any(|t| is_dead(m, t)) {
+        return None;
+    }
+    Some(compact_mesh(m, 1024))
+}
+
+fn compact_mesh(m: &EditMesh, leaf_max: usize) -> EditMesh {
     let nv = m.nverts();
     let mut new_of_old = vec![NONE; nv];
     let mut pos = Vec::new();
@@ -349,8 +379,7 @@ pub fn relayout(m: &EditMesh, slack: f32, leaf_max: usize) -> EditMesh {
     if let Some(last) = pn.last_mut() {
         *last = 0;
     }
-    let compact = EditMesh::from_trimesh(TriMesh { positions: pos, tris, poly_next: pn }, leaf_max);
-    with_slack(&compact, slack)
+    EditMesh::from_trimesh(TriMesh { positions: pos, tris, poly_next: pn }, leaf_max)
 }
 
 /// The same leaves with room: slab capacities = ceil(live x slack) + minimum.
@@ -618,6 +647,12 @@ fn key(len2: f32) -> u32 {
 /// One dab of dyntopo: collapse, split, relax inside the sphere (c, r). Marks what changed in
 /// `modified` (normals, bounds, GPU). Returns (splits, collapses).
 pub fn update_region(m: &mut EditMesh, st: &mut DynState, tx: &mut Transaction, modified: &mut StampSet, c: [f32; 3], r: f32, lmax: f32) -> (u32, u32) {
+    update_region_budget(m, st, tx, modified, c, r, lmax, MAX_SPLITS_PER_DAB, MAX_COLLAPSES_PER_DAB)
+}
+
+/// `update_region` with explicit op budgets (a mirrored dab shares one budget).
+#[allow(clippy::too_many_arguments)]
+pub fn update_region_budget(m: &mut EditMesh, st: &mut DynState, tx: &mut Transaction, modified: &mut StampSet, c: [f32; 3], r: f32, lmax: f32, max_splits: u32, max_collapses: u32) -> (u32, u32) {
     if !m.topo.is_dynamic() || st.vfree.len() != m.nleaves() {
         return (0, 0);
     }
@@ -660,7 +695,7 @@ pub fn update_region(m: &mut EditMesh, st: &mut DynState, tx: &mut Transaction, 
     let mut collapses = 0;
     for i in 0..edges.len() {
         let (k, a, b) = edges[i];
-        if f32::from_bits(k) >= lmin2 || collapses >= MAX_COLLAPSES_PER_DAB {
+        if f32::from_bits(k) >= lmin2 || collapses >= max_collapses {
             break;
         }
         if m.topo.vtris(a as usize).is_empty() || m.topo.vtris(b as usize).is_empty() || elen(m, a, b) >= lmin2 {
@@ -675,7 +710,7 @@ pub fn update_region(m: &mut EditMesh, st: &mut DynState, tx: &mut Transaction, 
     let mut heap: std::collections::BinaryHeap<(u32, u32, u32)> = edges.iter().filter(|e| f32::from_bits(e.0) > lmax2).copied().collect();
     let mut splits = 0;
     while let Some((_, a, b)) = heap.pop() {
-        if splits >= MAX_SPLITS_PER_DAB {
+        if splits >= max_splits {
             break;
         }
         let len2 = elen(m, a, b);

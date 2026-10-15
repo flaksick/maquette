@@ -445,7 +445,8 @@ pub extern "C" fn eng_checkpoint_failed() {
 pub extern "C" fn eng_export_obj(out_faces: *mut u32) -> u32 {
     with_engine(|e| {
         let mut buf = std::mem::take(&mut e.out);
-        let st = crate::objio::write_obj(&e.mesh, &mut buf);
+        let compact = crate::dyntopo::compact(&e.mesh); // dyntopo slack: live triangles only
+        let st = crate::objio::write_obj(compact.as_ref().unwrap_or(&e.mesh), &mut buf);
         e.out = buf;
         unsafe { *out_faces = st.faces as u32 };
         e.out.len() as u32
@@ -460,9 +461,10 @@ pub extern "C" fn eng_stats(out: *mut u32) {
     with_engine(|e| {
         let vb: usize = e.gpu.pages.iter().map(|p| p.vertex_bytes()).sum();
         let ib: usize = e.gpu.pages.iter().map(|p| p.nindices as usize * 4).sum();
+        let (live_t, live_v) = crate::dyntopo::abi::live_counts(e); // dead dyntopo slots don't count
         let v = [
-            e.mesh.nverts() as u32,
-            e.mesh.ntris() as u32,
+            live_v,
+            live_t,
             e.mesh.nleaves() as u32,
             e.gpu.pages.len() as u32,
             e.hist.undo.len() as u32,
