@@ -199,6 +199,7 @@ async function chooseVersion() {
   const cold = maquetteWindows(await self.clients.matchAll({ type: 'window', includeUncontrolled: true })).length === 0;
   return locked(async () => {
     const st = await load();
+    const before = JSON.stringify(st);
     if (cold && st.pending && !st.bad.includes(st.pending) && (await usable(st, st.pending))) {
       st.current = st.pending;
       st.pending = null;
@@ -214,7 +215,7 @@ async function chooseVersion() {
         st.current = id = back;
       } else st.boots[id] = n + 1;
     }
-    await save(st);
+    if (JSON.stringify(st) !== before) await save(st); // a launch of a good version writes nothing
     return id ? st.versions[id] : null;
   });
 }
