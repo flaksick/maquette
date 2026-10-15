@@ -6,7 +6,7 @@
 //   next launch, so an update can't swap the app mid-sculpt.
 // - The prod scope (/maquette/) never handles /maquette/dev/: the dev channel has its own worker.
 // - It only ever fetches the app's own files (invariant 0).
-const VERSION = '899e6c685409';
+const VERSION = '2a55b5f469a6';
 const CHANNEL = 'prod';
 const PREFIX = `maquette-${CHANNEL}-`;
 const CACHE = PREFIX + VERSION;
